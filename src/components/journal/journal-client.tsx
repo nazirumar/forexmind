@@ -63,6 +63,7 @@ import {
 import { TradeForm } from "@/components/journal/trade-form";
 import { StatsPanel } from "@/components/journal/stats-panel";
 import { AnalyticsPanel } from "@/components/journal/analytics-panel";
+import { JournalReviewPanel } from "@/components/journal/journal-review-panel";
 import {
   computeStats,
   formatMoney,
@@ -243,6 +244,13 @@ export function JournalClient() {
       {!authRequired && filteredStats && (
         <div className="mt-6">
           <StatsPanel stats={filteredStats} />
+        </div>
+      )}
+
+      {/* AI Journal Review - only show when user has any trades */}
+      {!authRequired && loaded && trades.length > 0 && (
+        <div className="mt-6">
+          <JournalReviewPanel closedCount={filteredStats?.closed ?? 0} />
         </div>
       )}
 
