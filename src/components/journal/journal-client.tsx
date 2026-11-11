@@ -18,7 +18,7 @@
  * we use it instead of re-fetching, to keep the UI snappy.
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Plus, Pencil, Trash2, Loader2, AlertTriangle, BookOpen, RefreshCw } from "lucide-react";
+import { Plus, Pencil, Trash2, Loader2, AlertTriangle, BookOpen, RefreshCw, BarChart3, ListOrdered } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -62,6 +62,7 @@ import {
 } from "@/components/ui/table";
 import { TradeForm } from "@/components/journal/trade-form";
 import { StatsPanel } from "@/components/journal/stats-panel";
+import { AnalyticsPanel } from "@/components/journal/analytics-panel";
 import {
   computeStats,
   formatMoney,
@@ -85,6 +86,7 @@ export function JournalClient() {
   const [authRequired, setAuthRequired] = useState(false);
 
   const [filter, setFilter] = useState<Filter>({ pair: "all", direction: "all" });
+  const [view, setView] = useState<"trades" | "analytics">("trades");
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<TradeRow | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -244,8 +246,51 @@ export function JournalClient() {
         </div>
       )}
 
-      {/* Filter bar */}
+      {/* View toggle: Trades table vs Analytics charts */}
       {!authRequired && loaded && trades.length > 0 && (
+        <div className="mt-6 flex items-center gap-1 rounded-md border border-border bg-card/40 p-1 w-fit">
+          <button
+            type="button"
+            onClick={() => setView("trades")}
+            aria-pressed={view === "trades"}
+            className={cn(
+              "inline-flex items-center gap-1.5 rounded-sm px-3 py-1.5 text-xs font-medium transition-colors",
+              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+              view === "trades"
+                ? "bg-primary text-primary-foreground"
+                : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            <ListOrdered className="h-3.5 w-3.5" aria-hidden="true" />
+            Trades
+          </button>
+          <button
+            type="button"
+            onClick={() => setView("analytics")}
+            aria-pressed={view === "analytics"}
+            className={cn(
+              "inline-flex items-center gap-1.5 rounded-sm px-3 py-1.5 text-xs font-medium transition-colors",
+              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+              view === "analytics"
+                ? "bg-primary text-primary-foreground"
+                : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            <BarChart3 className="h-3.5 w-3.5" aria-hidden="true" />
+            Analytics
+          </button>
+        </div>
+      )}
+
+      {/* Analytics view (charts) */}
+      {!authRequired && loaded && view === "analytics" && trades.length > 0 && (
+        <div className="mt-6">
+          <AnalyticsPanel trades={filtered} />
+        </div>
+      )}
+
+      {/* Filter bar - only relevant to the trades table view */}
+      {!authRequired && loaded && trades.length > 0 && view === "trades" && (
         <div className="mt-6 flex flex-wrap items-center gap-2">
           <span className="text-xs text-muted-foreground">Filter:</span>
           <Select
@@ -329,7 +374,7 @@ export function JournalClient() {
           </Card>
         )}
 
-        {loaded && !authRequired && filtered.length > 0 && (
+        {loaded && !authRequired && filtered.length > 0 && view === "trades" && (
           <Card>
             <CardContent className="p-0 overflow-x-auto">
               <Table>
