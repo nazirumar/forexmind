@@ -76,7 +76,7 @@ const DEFAULT_FORM: FormState = {
   currentPrice: "",
 };
 
-export default function RiskCalculatorPage() {
+export function RiskCalculatorClient() {
   const [form, setForm] = useState<FormState>(DEFAULT_FORM);
 
   // Derived values recompute on every keystroke.

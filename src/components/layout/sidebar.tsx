@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { NAV_ITEMS } from "@/lib/nav";
 import { TrendingDown } from "lucide-react";
+import { UserMenu } from "@/components/layout/user-menu";
 
 /**
  * Desktop sidebar (>= lg). Fixed width, full-height, sticky.
@@ -63,6 +64,7 @@ export function Sidebar() {
       </nav>
 
       <div className="px-6 py-4 border-t border-border">
+        <UserMenu className="mb-3" />
         <p className="text-[11px] leading-relaxed text-muted-foreground">
           Not financial advice. Trading forex involves substantial risk of
           loss.

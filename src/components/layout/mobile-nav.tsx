@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils";
 import { NAV_ITEMS } from "@/lib/nav";
 import { TrendingDown, Menu, X } from "lucide-react";
 import { useState } from "react";
+import { UserMenu } from "@/components/layout/user-menu";
 
 /**
  * Mobile top navigation (< lg). Hamburger toggles a dropdown panel
@@ -99,6 +100,9 @@ export function MobileNav() {
               );
             })}
           </ul>
+          <div className="mt-3 px-3 pt-3 border-t border-border">
+            <UserMenu />
+          </div>
           <p className="mt-3 px-3 text-[11px] leading-relaxed text-muted-foreground">
             Not financial advice. Trading forex involves substantial risk of
             loss.
