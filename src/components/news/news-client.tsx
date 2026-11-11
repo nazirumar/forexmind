@@ -35,6 +35,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { MarketBrief } from "@/components/news/market-brief";
+import { PriceTicker } from "@/components/prices/price-ticker";
 import {
   matchesWatchlist,
   timeAgo,
@@ -104,6 +105,11 @@ export function NewsClient() {
 
   return (
     <>
+      {/* Live FX ticker strip - sits above the page header so prices are always visible while reading news */}
+      <div className="rounded-lg border border-border bg-card/40 px-3 mb-[-1px]">
+        <PriceTicker />
+      </div>
+
       <PageHeader
         title="Market News"
         description="Forex headlines and an AI market brief that summarizes drivers and risks. Advisory only - never financial advice."

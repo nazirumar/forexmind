@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { Calculator, AlertTriangle, ArrowUpRight, ArrowDownRight } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
 import { Input } from "@/components/ui/input";
@@ -77,7 +78,49 @@ const DEFAULT_FORM: FormState = {
 };
 
 export function RiskCalculatorClient() {
-  const [form, setForm] = useState<FormState>(DEFAULT_FORM);
+  const searchParams = useSearchParams();
+  const initialPair = searchParams.get("pair") ?? "EURUSD";
+
+  const [form, setForm] = useState<FormState>(() => ({
+    ...DEFAULT_FORM,
+    pair: PAIRS.some((p) => p.value === initialPair) ? initialPair : "EURUSD",
+  }));
+
+  // Live prices: fetch on mount so we can auto-fill "current price"
+  // for JPY / USD-base pairs that need it for pip-value computation.
+  const [liveRates, setLiveRates] = useState<Record<string, number>>({});
+
+  useEffect(() => {
+    let active = true;
+    fetch("/api/prices")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (!active || !data?.quotes) return;
+        const map: Record<string, number> = {};
+        for (const q of data.quotes) map[q.pair] = q.rate;
+        setLiveRates(map);
+      })
+      .catch(() => {
+        // Network error - live prices just won't auto-fill. The user
+        // can still type the price manually.
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  // Auto-fill currentPrice when:
+  //  - the pair needs a price (JPY quote, USD base, or cross), AND
+  //  - we have a live rate for it, AND
+  //  - the user hasn't typed anything into the field yet.
+  // Once the user types, we stop auto-filling (respect their input).
+  const pairNeedsPrice = PAIRS.find((p) => p.value === normalizePair(form.pair))?.needsPrice ?? false;
+  const liveRate = liveRates[form.pair];
+  useEffect(() => {
+    if (pairNeedsPrice && liveRate != null && form.currentPrice === "") {
+      setForm((prev) => ({ ...prev, currentPrice: String(liveRate) }));
+    }
+  }, [pairNeedsPrice, liveRate, form.currentPrice]);
 
   // Derived values recompute on every keystroke.
   const computed = useMemo(() => compute(form), [form]);
@@ -85,7 +128,14 @@ export function RiskCalculatorClient() {
   const showPriceField = pairMeta?.needsPrice ?? false;
 
   const update = <K extends keyof FormState>(key: K, value: FormState[K]) => {
-    setForm((prev) => ({ ...prev, [key]: value }));
+    setForm((prev) => {
+      // When the pair changes, clear the currentPrice field so the
+      // live-price auto-fill effect can re-trigger for the new pair.
+      if (key === "pair" && value !== prev.pair) {
+        return { ...prev, pair: value as FormState["pair"], currentPrice: "" };
+      }
+      return { ...prev, [key]: value };
+    });
   };
 
   const reset = () => setForm(DEFAULT_FORM);

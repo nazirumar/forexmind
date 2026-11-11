@@ -2,6 +2,7 @@ import Link from "next/link";
 import { NAV_ITEMS } from "@/lib/nav";
 import { PageHeader } from "@/components/layout/page-header";
 import { DashboardStats } from "@/components/dashboard/dashboard-stats";
+import { PriceTicker } from "@/components/prices/price-ticker";
 import { TrendingDown, ArrowRight, AlertTriangle } from "lucide-react";
 
 export const metadata = {
@@ -31,6 +32,12 @@ export default function DashboardPage() {
           Not financial advice. Trading forex involves substantial risk of
           loss. ForexMind never places trades and never predicts prices.
         </p>
+      </div>
+
+      {/* Live FX price ticker - works in the sandbox (free no-key API).
+          Clicking a pair navigates to the risk calculator with it pre-selected. */}
+      <div className="mt-4 rounded-lg border border-border bg-card/40 px-3">
+        <PriceTicker />
       </div>
 
       {/* Per-user journal snapshot (server component).
