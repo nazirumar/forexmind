@@ -36,6 +36,7 @@ import {
 } from "@/components/ui/select";
 import { MarketBrief } from "@/components/news/market-brief";
 import { PriceTicker } from "@/components/prices/price-ticker";
+import { EconomicCalendarPanel } from "@/components/calendar/economic-calendar-panel";
 import {
   matchesWatchlist,
   timeAgo,
@@ -222,6 +223,11 @@ export function NewsClient() {
           <MarketBrief headlines={filtered} watchlist={watchlist} />
         </div>
       )}
+
+      {/* Economic Calendar - shows upcoming high-impact events */}
+      <div className="mt-6">
+        <EconomicCalendarPanel />
+      </div>
 
       {/* Headlines list */}
       {loaded && data && (
