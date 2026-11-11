@@ -65,10 +65,10 @@ const tradeBaseFields = {
       message: "Unsupported pair. Pick one from the list.",
     }),
   direction: z.enum(DIRECTIONS, {
-    errorMap: () => ({ message: "Direction must be buy or sell." }),
+    error: () => ({ message: "Direction must be buy or sell." }),
   }),
   entry_price: z
-    .number({ errorMap: () => ({ message: "Entry price must be a number." }) })
+    .number({ error: () => ({ message: "Entry price must be a number." }) })
     .positive("Entry price must be greater than zero.")
     .max(1_000_000, "Entry price looks too large."),
   exit_price: z
@@ -78,7 +78,7 @@ const tradeBaseFields = {
     .optional()
     .nullable(),
   stop_loss: z
-    .number({ errorMap: () => ({ message: "Stop loss must be a number." }) })
+    .number({ error: () => ({ message: "Stop loss must be a number." }) })
     .positive("Stop loss must be greater than zero.")
     .max(1_000_000, "Stop loss looks too large."),
   take_profit: z
@@ -88,7 +88,7 @@ const tradeBaseFields = {
     .optional()
     .nullable(),
   lot_size: z
-    .number({ errorMap: () => ({ message: "Lot size must be a number." }) })
+    .number({ error: () => ({ message: "Lot size must be a number." }) })
     .positive("Lot size must be greater than zero.")
     .max(10_000, "Lot size looks too large."),
   opened_at: z

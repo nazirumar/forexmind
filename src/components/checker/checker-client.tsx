@@ -171,7 +171,8 @@ export function CheckerClient() {
       return;
     }
 
-    const req: CheckRequest = { idea, rules };
+    // Validate against the schema first; the parsed result has the
+    // canonical shape (rationale defaulted to "", optionals normalized).
     const parseResult = tradeIdeaSchema.safeParse(idea);
     if (!parseResult.success) {
       const msg = parseResult.error.issues
@@ -180,6 +181,8 @@ export function CheckerClient() {
       setError(`Invalid idea: ${msg}`);
       return;
     }
+
+    const req: CheckRequest = { idea: parseResult.data, rules };
 
     setSubmitting(true);
     try {

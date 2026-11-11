@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { NAV_ITEMS } from "@/lib/nav";
 import { PageHeader } from "@/components/layout/page-header";
+import { DashboardStats } from "@/components/dashboard/dashboard-stats";
 import { TrendingDown, ArrowRight, AlertTriangle } from "lucide-react";
 
 export const metadata = {
@@ -31,6 +32,11 @@ export default function DashboardPage() {
           loss. ForexMind never places trades and never predicts prices.
         </p>
       </div>
+
+      {/* Per-user journal snapshot (server component).
+          Renders nothing when the user is not signed in (sandbox /
+          preview), so the rest of the dashboard still works. */}
+      <DashboardStats />
 
       {/* Tool cards */}
       <section

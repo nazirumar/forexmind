@@ -272,8 +272,7 @@ describe("tradeCreateSchema - validation", () => {
   it("rejects invalid session", () => {
     const r = tradeCreateSchema.safeParse({
       ...valid,
-      // @ts-expect-error intentionally invalid
-      session: "tokyo",
+      session: "tokyo" as unknown as "asian",
     });
     expect(r.success).toBe(false);
   });

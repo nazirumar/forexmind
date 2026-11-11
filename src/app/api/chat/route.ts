@@ -83,18 +83,25 @@ export async function POST(req: Request) {
   ];
 
   // ---- 4. Call Groq with streaming ---------------------------------------
-  let stream: AsyncIterable<{
-    choices: { delta?: { content?: string } }[];
-  }>;
+  // The Groq SDK returns Stream<ChatCompletionChunk> when `stream: true`.
+  // We type it loosely here so we can iterate without pulling in the
+  // full ChatCompletionChunk type (which has delta.content: string | null).
+  type StreamChunk = {
+    choices: Array<{ delta?: { content?: string | null } }>;
+  };
+  let stream: AsyncIterable<StreamChunk>;
 
   try {
-    stream = await getGroq().chat.completions.create({
+    const created = await getGroq().chat.completions.create({
       model: GROQ_MODEL_MAIN,
       messages,
       stream: true,
       temperature: 0.4,
       max_tokens: 1024,
     });
+    // The SDK's Stream<T> implements AsyncIterable<T>; we cast to our
+    // narrower shape so we don't import the full ChatCompletionChunk.
+    stream = created as unknown as AsyncIterable<StreamChunk>;
   } catch (err) {
     return handleGroqError(err);
   }

@@ -29,11 +29,11 @@ export const tradeIdeaSchema = z.object({
     .transform((s) => normalizePair(s)),
   direction: z.enum(["buy", "sell"]),
   entry_price: z
-    .number({ errorMap: () => ({ message: "Entry must be a number." }) })
+    .number({ error: () => ({ message: "Entry must be a number." }) })
     .positive("Entry must be positive.")
     .max(1_000_000),
   stop_loss: z
-    .number({ errorMap: () => ({ message: "Stop loss must be a number." }) })
+    .number({ error: () => ({ message: "Stop loss must be a number." }) })
     .positive("Stop loss must be positive.")
     .max(1_000_000),
   take_profit: z
