@@ -6,25 +6,26 @@
  *
  * Flow:
  *  1. Authenticate (401 if no session).
- *  2. Validate body with zod (idea + rules).
- *  3. Fetch the user's 10 most-recent closed trades for journal context.
- *  4. Build the user message: a delimited block containing the idea
+ *  2. Rate-limit per user (checker bucket: 10 req/min burst, 0.5/sec refill).
+ *  3. Validate body with zod (idea + rules).
+ *  4. Fetch the user's 10 most-recent closed trades for journal context.
+ *  5. Build the user message: a delimited block containing the idea
  *     + rules + journal trades as DATA, not instructions.
- *  5. Call Groq with response_format json_object, parse with zod.
- *  6. Save the analysis to ai_analyses (best-effort; failure non-fatal).
- *  7. Return { verdict, analysis_id, has_journal_context }.
+ *  6. Call Groq with response_format json_object, parse with zod.
+ *  7. Save the analysis to ai_analyses (best-effort; failure non-fatal).
+ *  8. Return { verdict, analysis_id, has_journal_context }.
  *
- * Error mapping (same as /api/news/brief):
+ * Error mapping:
  *  - 401 -> session missing
+ *  - 429 -> rate limit (ours or Groq's)
  *  - 400 -> body validation
  *  - 503 -> Groq not configured / invalid key
- *  - 429 -> Groq rate limit
  *  - 502 -> Groq error / JSON parse failure
  */
 import { NextResponse } from "next/server";
 import { getGroq, GROQ_MODEL_MAIN, isGroqConfigured } from "@/lib/groq";
 import { SYSTEM_PROMPT_TRADE_CHECK } from "@/lib/prompts";
-import { UnauthorizedError, getUserOrThrow } from "@/lib/auth";
+import { UnauthorizedError, getUserOrThrow, enforceRateLimit } from "@/lib/auth";
 import {
   checkRequestSchema,
   checkVerdictSchema,
@@ -42,14 +43,19 @@ export async function POST(req: Request) {
     // 1. Auth first so anonymous callers can't burn Groq tokens.
     await getUserOrThrow();
 
-    // 2. Parse + validate body.
+    // 2. Rate limit (per-user checker bucket).
+    const rl = await enforceRateLimit(req, "checker");
+    if (!rl.ok) return rl.response;
+    const rateHeaders = rl.headers;
+
+    // 3. Parse + validate body.
     let body: unknown;
     try {
       body = await req.json();
     } catch {
       return NextResponse.json(
         { error: "Invalid JSON body." },
-        { status: 400 },
+        { status: 400, headers: rateHeaders },
       );
     }
 
@@ -60,7 +66,7 @@ export async function POST(req: Request) {
         .join("; ");
       return NextResponse.json(
         { error: `Invalid request. ${msg}` },
-        { status: 400 },
+        { status: 400, headers: rateHeaders },
       );
     }
 
@@ -70,7 +76,7 @@ export async function POST(req: Request) {
           error:
             "Groq API key is not configured. Set GROQ_API_KEY in .env.local (see .env.example).",
         },
-        { status: 503 },
+        { status: 503, headers: rateHeaders },
       );
     }
 
@@ -103,7 +109,7 @@ export async function POST(req: Request) {
       });
       rawContent = completion.choices[0]?.message?.content ?? "";
     } catch (err) {
-      return handleGroqError(err);
+      return handleGroqError(err, rateHeaders);
     }
 
     // 6. Parse the JSON with our zod schema. If parsing fails we
@@ -121,7 +127,7 @@ export async function POST(req: Request) {
           error:
             "The AI returned a malformed response. Please try again - rephrasing your rules may help.",
         },
-        { status: 502 },
+        { status: 502, headers: rateHeaders },
       );
     }
 
@@ -136,7 +142,7 @@ export async function POST(req: Request) {
           error:
             "The AI returned an unexpected structure. Please try again.",
         },
-        { status: 502 },
+        { status: 502, headers: rateHeaders },
       );
     }
 
@@ -154,7 +160,7 @@ export async function POST(req: Request) {
       analysis_id: analysisId,
       has_journal_context: hasJournalContext,
     };
-    return NextResponse.json(response);
+    return NextResponse.json(response, { headers: rateHeaders });
   } catch (err) {
     if (err instanceof UnauthorizedError) {
       return NextResponse.json({ error: err.message }, { status: 401 });
@@ -252,7 +258,10 @@ function buildUserMessage(
   return lines.join("\n");
 }
 
-function handleGroqError(err: unknown): NextResponse {
+function handleGroqError(
+  err: unknown,
+  rateHeaders: Record<string, string> = {},
+): NextResponse {
   const e = err as { status?: number; message?: string; error?: { message?: string } };
   const status = e?.status;
   const message = e?.error?.message || e?.message || "Unknown error";
@@ -263,24 +272,24 @@ function handleGroqError(err: unknown): NextResponse {
         error:
           "Groq API key is invalid, unauthorized, or forbidden. Check GROQ_API_KEY in .env.local.",
       },
-      { status: 503 },
+      { status: 503, headers: rateHeaders },
     );
   }
   if (status === 429) {
     return NextResponse.json(
       { error: "Rate limit reached on Groq. Please wait a moment and try again." },
-      { status: 429 },
+      { status: 429, headers: rateHeaders },
     );
   }
   if (status === 503) {
     return NextResponse.json(
       { error: "Groq service is temporarily unavailable. Please try again shortly." },
-      { status: 503 },
+      { status: 503, headers: rateHeaders },
     );
   }
   console.error("[/api/checker] Groq error:", message, err);
   return NextResponse.json(
     { error: "The AI service returned an unexpected error. Please try again in a moment." },
-    { status: 502 },
+    { status: 502, headers: rateHeaders },
   );
 }

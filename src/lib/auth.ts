@@ -62,3 +62,77 @@ export async function getUserOrNull(): Promise<User | null> {
     return null;
   }
 }
+
+// ---------------------------------------------------------------------------
+// Rate-limit helper
+// ---------------------------------------------------------------------------
+
+import { NextResponse } from "next/server";
+import {
+  rateLimitCheck,
+  rateLimitHeaders,
+  type RateLimitKind,
+  type RateLimitResult,
+} from "@/lib/rate-limit";
+
+/**
+ * Outcome of a `enforceRateLimit` call.
+ *  - `ok`     -> caller should proceed; attach `headers` to the response.
+ *  - `blocked`-> caller should immediately return `response` (HTTP 429).
+ */
+type EnforceOutcome =
+  | { ok: true; headers: Record<string, string> }
+  | { ok: false; response: NextResponse };
+
+/**
+ * Enforce a per-user rate limit on a route handler.
+ *
+ * Usage:
+ *
+ *   const rl = await enforceRateLimit(req, "ai");
+ *   if (!rl.ok) return rl.response;
+ *   // ... proceed; attach rl.headers to your success response.
+ *
+ * For authenticated routes the bucket key is `user.id`; for public
+ * routes (no session) we fall back to the caller's IP via
+ * `x-forwarded-for`. This keeps crawlers off the public endpoints
+ * without forcing every reader to sign in.
+ *
+ * In the sandbox (no real Supabase), every anonymous caller shares
+ * the same `ip:anon` bucket, so the limit IS still enforced - just
+ * coarser than per-user. With real keys in prod, each user gets
+ * their own bucket.
+ */
+export async function enforceRateLimit(
+  req: Request,
+  kind: RateLimitKind,
+): Promise<EnforceOutcome> {
+  // Try to identify the caller: prefer user.id, fall back to IP.
+  let key: string;
+  const user = await getUserOrNull();
+  if (user) {
+    key = `u:${user.id}`;
+  } else {
+    const xff = req.headers.get("x-forwarded-for");
+    const ip = xff ? xff.split(",")[0]!.trim() : "anon";
+    key = `ip:${ip}`;
+  }
+
+  const result: RateLimitResult = rateLimitCheck(key, kind);
+  const headers = rateLimitHeaders(result);
+
+  if (!result.success) {
+    return {
+      ok: false,
+      response: NextResponse.json(
+        {
+          error:
+            "Rate limit reached. Please slow down and try again in a moment.",
+        },
+        { status: 429, headers },
+      ),
+    };
+  }
+
+  return { ok: true, headers };
+}

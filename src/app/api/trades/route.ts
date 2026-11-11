@@ -2,13 +2,17 @@
  * GET /api/trades      - list the current user's trades + aggregate stats
  * POST /api/trades     - create a new trade
  *
- * Both require an authenticated session (401 if missing). All write
- * input is zod-validated; user_id is taken from the session, never
- * from the request body.
+ * Both require an authenticated session (401 if missing) and are
+ * rate-limited per user:
+ *  - GET  -> read bucket (120 req/min burst, 4/sec refill)
+ *  - POST -> write bucket (60 req/min burst, 2/sec refill)
+ *
+ * All write input is zod-validated; user_id is taken from the
+ * session, never from the request body.
  */
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { UnauthorizedError } from "@/lib/auth";
+import { UnauthorizedError, enforceRateLimit, getUserOrThrow } from "@/lib/auth";
 import {
   TradesError,
   createTrade,
@@ -26,6 +30,15 @@ const listQuerySchema = z.object({
 
 export async function GET(req: Request) {
   try {
+    // Auth FIRST so anonymous callers can't deplete the rate-limit
+    // bucket or learn whether a body is valid (401 vs 400 leaks info).
+    await getUserOrThrow();
+
+    // Rate limit (per-user read bucket).
+    const rl = await enforceRateLimit(req, "read");
+    if (!rl.ok) return rl.response;
+    const rateHeaders = rl.headers;
+
     const url = new URL(req.url);
     const qs = listQuerySchema.safeParse({
       limit: url.searchParams.get("limit") ?? undefined,
@@ -33,11 +46,11 @@ export async function GET(req: Request) {
     if (!qs.success) {
       return NextResponse.json(
         { error: `Invalid query: ${qs.error.issues[0]?.message ?? "invalid"}` },
-        { status: 400 },
+        { status: 400, headers: rateHeaders },
       );
     }
     const result = await listTrades(qs.data.limit);
-    return NextResponse.json(result);
+    return NextResponse.json(result, { headers: rateHeaders });
   } catch (err) {
     return handleError(err);
   }
@@ -47,13 +60,21 @@ export async function GET(req: Request) {
 
 export async function POST(req: Request) {
   try {
+    // Auth FIRST (see GET above).
+    await getUserOrThrow();
+
+    // Rate limit (per-user write bucket).
+    const rl = await enforceRateLimit(req, "write");
+    if (!rl.ok) return rl.response;
+    const rateHeaders = rl.headers;
+
     let body: unknown;
     try {
       body = await req.json();
     } catch {
       return NextResponse.json(
         { error: "Invalid JSON body." },
-        { status: 400 },
+        { status: 400, headers: rateHeaders },
       );
     }
 
@@ -64,12 +85,12 @@ export async function POST(req: Request) {
         .join("; ");
       return NextResponse.json(
         { error: `Invalid trade: ${msg}` },
-        { status: 400 },
+        { status: 400, headers: rateHeaders },
       );
     }
 
     const created = await createTrade(parsed.data);
-    return NextResponse.json(created, { status: 201 });
+    return NextResponse.json(created, { status: 201, headers: rateHeaders });
   } catch (err) {
     return handleError(err);
   }

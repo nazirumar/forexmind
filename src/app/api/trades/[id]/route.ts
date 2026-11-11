@@ -3,13 +3,18 @@
  * PATCH  /api/trades/[id]  - partial update
  * DELETE /api/trades/[id]  - delete
  *
- * All three require an authenticated session. RLS guarantees users
- * can only ever see their own rows; a request for someone else's id
- * returns 404 (existence is not leaked).
+ * All three require an authenticated session and are rate-limited per
+ * user:
+ *  - GET    -> read bucket (120 req/min burst, 4/sec refill)
+ *  - PATCH  -> write bucket (60 req/min burst, 2/sec refill)
+ *  - DELETE -> write bucket
+ *
+ * RLS guarantees users can only ever see their own rows; a request
+ * for someone else's id returns 404 (existence is not leaked).
  */
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { UnauthorizedError } from "@/lib/auth";
+import { UnauthorizedError, enforceRateLimit, getUserOrThrow } from "@/lib/auth";
 import {
   TradesError,
   getTrade,
@@ -25,20 +30,29 @@ const idSchema = z.string().uuid("Trade id must be a UUID.");
 // ---- GET ---------------------------------------------------------------
 
 export async function GET(
-  _req: Request,
+  req: Request,
   ctx: { params: Promise<{ id: string }> },
 ) {
   try {
+    // Auth FIRST so anonymous callers can't deplete the rate-limit
+    // bucket or learn whether an id exists (401 vs 404 leaks info).
+    await getUserOrThrow();
+
+    // Rate limit (per-user read bucket).
+    const rl = await enforceRateLimit(req, "read");
+    if (!rl.ok) return rl.response;
+    const rateHeaders = rl.headers;
+
     const params = await ctx.params;
     const idCheck = idSchema.safeParse(params.id);
     if (!idCheck.success) {
       return NextResponse.json(
         { error: idCheck.error.issues[0]?.message ?? "Invalid id." },
-        { status: 400 },
+        { status: 400, headers: rateHeaders },
       );
     }
     const trade = await getTrade(idCheck.data);
-    return NextResponse.json(trade);
+    return NextResponse.json(trade, { headers: rateHeaders });
   } catch (err) {
     return handleError(err);
   }
@@ -51,12 +65,20 @@ export async function PATCH(
   ctx: { params: Promise<{ id: string }> },
 ) {
   try {
+    // Auth FIRST (see GET above).
+    await getUserOrThrow();
+
+    // Rate limit (per-user write bucket).
+    const rl = await enforceRateLimit(req, "write");
+    if (!rl.ok) return rl.response;
+    const rateHeaders = rl.headers;
+
     const params = await ctx.params;
     const idCheck = idSchema.safeParse(params.id);
     if (!idCheck.success) {
       return NextResponse.json(
         { error: idCheck.error.issues[0]?.message ?? "Invalid id." },
-        { status: 400 },
+        { status: 400, headers: rateHeaders },
       );
     }
 
@@ -66,7 +88,7 @@ export async function PATCH(
     } catch {
       return NextResponse.json(
         { error: "Invalid JSON body." },
-        { status: 400 },
+        { status: 400, headers: rateHeaders },
       );
     }
 
@@ -77,12 +99,12 @@ export async function PATCH(
         .join("; ");
       return NextResponse.json(
         { error: `Invalid update: ${msg}` },
-        { status: 400 },
+        { status: 400, headers: rateHeaders },
       );
     }
 
     const updated = await updateTrade(idCheck.data, parsed.data);
-    return NextResponse.json(updated);
+    return NextResponse.json(updated, { headers: rateHeaders });
   } catch (err) {
     return handleError(err);
   }
@@ -91,20 +113,28 @@ export async function PATCH(
 // ---- DELETE ------------------------------------------------------------
 
 export async function DELETE(
-  _req: Request,
+  req: Request,
   ctx: { params: Promise<{ id: string }> },
 ) {
   try {
+    // Auth FIRST (see GET above).
+    await getUserOrThrow();
+
+    // Rate limit (per-user write bucket).
+    const rl = await enforceRateLimit(req, "write");
+    if (!rl.ok) return rl.response;
+    const rateHeaders = rl.headers;
+
     const params = await ctx.params;
     const idCheck = idSchema.safeParse(params.id);
     if (!idCheck.success) {
       return NextResponse.json(
         { error: idCheck.error.issues[0]?.message ?? "Invalid id." },
-        { status: 400 },
+        { status: 400, headers: rateHeaders },
       );
     }
     await deleteTrade(idCheck.data);
-    return new NextResponse(null, { status: 204 });
+    return new NextResponse(null, { status: 204, headers: rateHeaders });
   } catch (err) {
     return handleError(err);
   }

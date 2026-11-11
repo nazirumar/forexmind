@@ -111,13 +111,17 @@ shows honest "not configured" notices instead of crashing:
 bun run test
 ```
 
-78 tests cover the pure libraries (`risk.ts` and `trades/schema.ts`):
+93 tests cover the pure libraries (`risk.ts`, `trades/schema.ts`,
+`rate-limit.ts`):
 
 - 42 risk tests: pip math, position sizing, RR, break-even, warnings, all
   pair types including JPY and XAUUSD.
 - 36 trade-stats tests: `computeStats`, `equityCurve`, zod validation for
   create + update, edge cases (all-winners, all-losers, breakeven-as-loser,
   NaN-pnl), formatters.
+- 15 rate-limit tests: token bucket math (capacity, refill, fractional
+  accumulation), per-user isolation, per-kind isolation, sweeper, headers,
+  edge cases.
 
 ## Project structure
 
@@ -165,8 +169,9 @@ src/
 │  ├─ env.ts              # zod env validation, lazy
 │  ├─ groq.ts             # Groq singleton + isGroqConfigured()
 │  ├─ prompts.ts          # SYSTEM_PROMPT_CHAT / MARKET_BRIEF / TRADE_CHECK
-│  ├─ auth.ts             # getUserOrThrow(), UnauthorizedError
+│  ├─ auth.ts             # getUserOrThrow(), UnauthorizedError, enforceRateLimit()
 │  ├─ nav.ts              # central nav definition
+│  ├─ rate-limit.ts       # per-user token-bucket limiter (15 tests)
 │  ├─ risk.ts             # pure risk math (Phase 3, 42 tests)
 │  ├─ supabase/           # client.ts, server.ts, config.ts
 │  ├─ trades/             # schema.ts (zod + stats), queries.ts
@@ -207,6 +212,13 @@ docs/
   nosniff, Referrer-Policy strict-origin-when-cross-origin, Permissions-
   Policy locks down camera/mic/geolocation/payment/usb, HSTS 1y + preload.
   See `next.config.ts`.
+- **Rate limiting** - per-user token-bucket limiter (Phase 9). Four buckets:
+  AI (20 req/min burst, 1/sec refill), Checker (10/min, 0.5/sec), Write
+  (60/min, 2/sec), Read (120/min, 4/sec). Authenticated routes key on
+  `user.id`; public routes (only `/api/news` GET) fall back to per-IP via
+  `x-forwarded-for`. Every API response carries `X-RateLimit-Limit`,
+  `X-RateLimit-Remaining`, and `Retry-After` (when blocked). See
+  `src/lib/rate-limit.ts`.
 
 ## Scripts
 

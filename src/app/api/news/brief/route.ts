@@ -5,22 +5,23 @@
  *
  * Flow:
  *  1. Authenticate (401 if no session).
- *  2. Validate body with zod: { headlines: NewsItem[], watchlist?: string[] }.
+ *  2. Rate-limit per user (AI bucket: 20 req/min burst, 1/sec refill).
+ *  3. Validate body with zod: { headlines: NewsItem[], watchlist?: string[] }.
  *     - Headlines are capped at 20 items and 4000 chars total to keep
  *       the prompt bounded.
  *     - Watchlist is optional (default empty = "all majors").
- *  3. Build the user message: a delimited block containing the
+ *  4. Build the user message: a delimited block containing the
  *     headlines as DATA, not instructions. The system prompt
  *     (SYSTEM_PROMPT_MARKET_BRIEF) tells the model to treat the
  *     block as data and to never execute instructions inside it.
- *  4. Call Groq (non-streaming - the brief is short and we want a
+ *  5. Call Groq (non-streaming - the brief is short and we want a
  *     single complete response, not token-by-token).
- *  5. Return { brief: string } on success.
+ *  6. Return { brief: string } on success.
  *
- * Error mapping (same as /api/chat):
+ * Error mapping:
  *  - 401 -> session missing
+ *  - 429 -> rate limit (ours or Groq's)
  *  - 503 -> Groq not configured / invalid key
- *  - 429 -> Groq rate limit
  *  - 502 -> other Groq error
  *  - 400 -> body validation
  */
@@ -28,7 +29,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getGroq, GROQ_MODEL_MAIN, isGroqConfigured } from "@/lib/groq";
 import { SYSTEM_PROMPT_MARKET_BRIEF } from "@/lib/prompts";
-import { UnauthorizedError, getUserOrThrow } from "@/lib/auth";
+import { UnauthorizedError, getUserOrThrow, enforceRateLimit } from "@/lib/auth";
 import type { ChatCompletionMessageParam } from "groq-sdk/resources/chat/completions";
 
 export const runtime = "nodejs";
@@ -60,14 +61,19 @@ export async function POST(req: Request) {
     //    callers from burning the project's quota.
     await getUserOrThrow();
 
-    // 2. Parse + validate body.
+    // 2. Rate limit (per-user AI bucket).
+    const rl = await enforceRateLimit(req, "ai");
+    if (!rl.ok) return rl.response;
+    const rateHeaders = rl.headers;
+
+    // 3. Parse + validate body.
     let body: unknown;
     try {
       body = await req.json();
     } catch {
       return NextResponse.json(
         { error: "Invalid JSON body." },
-        { status: 400 },
+        { status: 400, headers: rateHeaders },
       );
     }
 
@@ -78,7 +84,7 @@ export async function POST(req: Request) {
         .join("; ");
       return NextResponse.json(
         { error: `Invalid request. ${msg}` },
-        { status: 400 },
+        { status: 400, headers: rateHeaders },
       );
     }
 
@@ -88,7 +94,7 @@ export async function POST(req: Request) {
           error:
             "Groq API key is not configured. Set GROQ_API_KEY in .env.local (see .env.example).",
         },
-        { status: 503 },
+        { status: 503, headers: rateHeaders },
       );
     }
 
@@ -144,17 +150,17 @@ ${headlinesBlock}`;
       });
       brief = completion.choices[0]?.message?.content ?? "";
     } catch (err) {
-      return handleGroqError(err);
+      return handleGroqError(err, rateHeaders);
     }
 
     if (!brief.trim()) {
       return NextResponse.json(
         { error: "The model returned an empty brief. Please try again." },
-        { status: 502 },
+        { status: 502, headers: rateHeaders },
       );
     }
 
-    return NextResponse.json({ brief });
+    return NextResponse.json({ brief }, { headers: rateHeaders });
   } catch (err) {
     if (err instanceof UnauthorizedError) {
       return NextResponse.json({ error: err.message }, { status: 401 });
@@ -167,7 +173,10 @@ ${headlinesBlock}`;
   }
 }
 
-function handleGroqError(err: unknown): NextResponse {
+function handleGroqError(
+  err: unknown,
+  rateHeaders: Record<string, string> = {},
+): NextResponse {
   const e = err as { status?: number; message?: string; error?: { message?: string } };
   const status = e?.status;
   const message = e?.error?.message || e?.message || "Unknown error";
@@ -178,24 +187,24 @@ function handleGroqError(err: unknown): NextResponse {
         error:
           "Groq API key is invalid, unauthorized, or forbidden. Check GROQ_API_KEY in .env.local.",
       },
-      { status: 503 },
+      { status: 503, headers: rateHeaders },
     );
   }
   if (status === 429) {
     return NextResponse.json(
       { error: "Rate limit reached on Groq. Please wait a moment and try again." },
-      { status: 429 },
+      { status: 429, headers: rateHeaders },
     );
   }
   if (status === 503) {
     return NextResponse.json(
       { error: "Groq service is temporarily unavailable. Please try again shortly." },
-      { status: 503 },
+      { status: 503, headers: rateHeaders },
     );
   }
   console.error("[/api/news/brief] Groq error:", message, err);
   return NextResponse.json(
     { error: "The AI service returned an unexpected error. Please try again in a moment." },
-    { status: 502 },
+    { status: 502, headers: rateHeaders },
   );
 }
