@@ -231,3 +231,100 @@ export function severityMeta(s: Severity): {
       return { label: "Low", color: "slate" };
   }
 }
+
+// ---------------------------------------------------------------------------
+// Recent check (history list)
+// ---------------------------------------------------------------------------
+
+/**
+ * One row in the "recent checks" list. Returned by the GET
+ * /api/checker/history endpoint (which wraps listRecentChecks()).
+ *
+ * The input_summary + output JSON columns are parsed into a typed
+ * shape so the UI doesn't have to do its own JSON.parse.
+ */
+export type RecentCheck = {
+  id: string;
+  created_at: string;
+  /** Trade idea that was checked (parsed from input_summary). */
+  idea: {
+    pair: string;
+    direction: "buy" | "sell";
+    entry_price: number;
+    stop_loss: number;
+    take_profit: number | null;
+    account_balance: number | null;
+    risk_pct: number | null;
+    lot_size: number | null;
+    rationale: string;
+  };
+  /** Rules char count at the time of the check (we don't store the
+   *  full rules text - just the length, to keep the row small). */
+  rules_chars: number;
+  /** The verdict (parsed from output JSON). */
+  verdict: "ok_to_proceed" | "review" | "skip";
+  /** Number of high-severity violations. */
+  violations_count: number;
+  /** The summary paragraph from the verdict. */
+  summary: string;
+};
+
+/**
+ * Parse a raw ai_analyses row (type="trade_check") into a RecentCheck.
+ * Returns null if parsing fails (malformed data). Pure.
+ *
+ * Mirrors parseRecentReview() from the journal layer.
+ */
+export function parseRecentCheck(row: {
+  id: string;
+  created_at: string;
+  input_summary: string | null;
+  output: string;
+}): RecentCheck | null {
+  try {
+    const input = JSON.parse(row.input_summary ?? "{}") as {
+      pair?: string;
+      direction?: string;
+      entry_price?: number;
+      stop_loss?: number;
+      take_profit?: number | null;
+      account_balance?: number | null;
+      risk_pct?: number | null;
+      lot_size?: number | null;
+      rationale?: string;
+      rules_chars?: number;
+    };
+    const output = JSON.parse(row.output) as {
+      verdict?: string;
+      violations?: Array<{ severity?: string }>;
+      summary?: string;
+    };
+    if (!output.verdict || !output.summary) return null;
+    if (!input.pair || !input.direction || input.entry_price == null || input.stop_loss == null) {
+      return null;
+    }
+    return {
+      id: row.id,
+      created_at: row.created_at,
+      idea: {
+        pair: input.pair,
+        direction: input.direction as "buy" | "sell",
+        entry_price: input.entry_price,
+        stop_loss: input.stop_loss,
+        take_profit: input.take_profit ?? null,
+        account_balance: input.account_balance ?? null,
+        risk_pct: input.risk_pct ?? null,
+        lot_size: input.lot_size ?? null,
+        rationale: input.rationale ?? "",
+      },
+      rules_chars: input.rules_chars ?? 0,
+      verdict: output.verdict as "ok_to_proceed" | "review" | "skip",
+      violations_count: (output.violations ?? []).filter(
+        (v) => v.severity === "high",
+      ).length,
+      summary: output.summary,
+    };
+  } catch {
+    return null;
+  }
+}

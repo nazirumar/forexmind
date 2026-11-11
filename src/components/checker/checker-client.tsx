@@ -47,6 +47,7 @@ import {
 } from "@/components/ui/select";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { VerdictPanel } from "@/components/checker/verdict-panel";
+import { CheckerHistoryPanel } from "@/components/checker/checker-history-panel";
 import {
   tradeIdeaSchema,
   type CheckRequest,
@@ -116,6 +117,8 @@ export function CheckerClient() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [response, setResponse] = useState<CheckResponse | null>(null);
+  // Bumped after each successful check so the history panel re-fetches.
+  const [historyRefreshKey, setHistoryRefreshKey] = useState(0);
 
   // Load rules from localStorage on mount; fall back to defaults.
   useEffect(() => {
@@ -202,6 +205,9 @@ export function CheckerClient() {
       }
       const data: CheckResponse = await res.json();
       setResponse(data);
+      // Bump the history refresh key so the panel re-fetches and
+      // shows the new check at the top of the list.
+      setHistoryRefreshKey((k) => k + 1);
     } catch (err) {
       setError(
         err instanceof Error ? err.message : "Network error - please try again.",
@@ -525,6 +531,11 @@ export function CheckerClient() {
               </CardContent>
             </Card>
           )}
+
+          {/* Recent checks history panel - below the verdict / empty state.
+              Renders nothing when the user has no past checks (the panel's
+              own empty state returns null in that case). */}
+          <CheckerHistoryPanel refreshKey={historyRefreshKey} />
 
           {/* Disclaimer */}
           <p className="text-[11px] leading-relaxed text-muted-foreground px-1">
