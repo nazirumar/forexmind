@@ -64,6 +64,7 @@ import { TradeForm } from "@/components/journal/trade-form";
 import { StatsPanel } from "@/components/journal/stats-panel";
 import { AnalyticsPanel } from "@/components/journal/analytics-panel";
 import { JournalReviewPanel } from "@/components/journal/journal-review-panel";
+import { ImportExportPanel } from "@/components/journal/import-export-panel";
 import {
   computeStats,
   formatMoney,
@@ -251,6 +252,15 @@ export function JournalClient() {
       {!authRequired && loaded && trades.length > 0 && (
         <div className="mt-6">
           <JournalReviewPanel closedCount={filteredStats?.closed ?? 0} />
+        </div>
+      )}
+
+      {/* Import/Export panel - always show when not auth-required so
+          the user can download the template + see the format even
+          before they have trades. */}
+      {!authRequired && loaded && (
+        <div className="mt-6">
+          <ImportExportPanel onImported={load} />
         </div>
       )}
 

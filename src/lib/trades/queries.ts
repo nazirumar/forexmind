@@ -100,6 +100,61 @@ export async function createTrade(input: TradeCreate): Promise<TradeRow> {
 }
 
 /**
+ * Bulk insert multiple trades in a single Supabase call.
+ *
+ *  - All trades get the same user_id (from the session, never the
+ *    request body).
+ *  - Returns the inserted rows (with id + created_at).
+ *  - On partial failure (some rows rejected by RLS or constraints),
+ *    Supabase rolls back the whole batch - we throw a TradesError
+ *    with the error message.
+ *
+ * Used by POST /api/trades/import for CSV import.
+ */
+export async function bulkCreateTrades(
+  inputs: TradeCreate[],
+): Promise<TradeRow[]> {
+  const { user, supabase } = await context();
+
+  if (inputs.length === 0) {
+    return [];
+  }
+
+  const rows = inputs.map((input) => ({
+    user_id: user.id,
+    pair: input.pair,
+    direction: input.direction,
+    entry_price: input.entry_price,
+    exit_price: input.exit_price ?? null,
+    stop_loss: input.stop_loss,
+    take_profit: input.take_profit ?? null,
+    lot_size: input.lot_size,
+    opened_at: input.opened_at,
+    closed_at: input.closed_at ?? null,
+    pnl: input.pnl ?? null,
+    strategy: input.strategy ?? null,
+    session: input.session ?? null,
+    emotion: input.emotion ?? null,
+    followed_plan: input.followed_plan,
+    notes: input.notes ?? null,
+  }));
+
+  const { data, error } = await supabase
+    .from("trades")
+    .insert(rows)
+    .select();
+
+  if (error) {
+    throw new TradesError(500, `Bulk insert failed: ${error.message}`);
+  }
+  if (!data) {
+    throw new TradesError(500, "Bulk insert returned no rows.");
+  }
+
+  return (data as unknown[]).map((d) => tradeRowSchema.parse(d));
+}
+
+/**
  * List the user's trades, most-recent-created first.
  *
  * - `limit` capped at MAX_LIST_LIMIT (200). Past that, we'd add cursor
