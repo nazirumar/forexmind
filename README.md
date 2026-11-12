@@ -220,6 +220,26 @@ docs/
   `X-RateLimit-Remaining`, and `Retry-After` (when blocked). See
   `src/lib/rate-limit.ts`.
 
+## PWA support
+
+ForexMind is installable as a Progressive Web App. On mobile, open the
+site in Safari (iOS) or Chrome (Android) and choose "Add to Home Screen"
+/ "Install app" - ForexMind opens in a standalone window with its own
+icon, like a native app.
+
+The PWA assets are all generated at build time (no binary files in the
+repo):
+
+- `/manifest.webmanifest` - app name, icons, theme color, standalone
+  display mode (from `src/app/manifest.ts`)
+- `/icon` + `/apple-icon` - brand icons rendered via `ImageResponse`
+  (from `src/app/icon.tsx` + `src/app/apple-icon.tsx`)
+- `/opengraph-image` - 1200x630 social share card for Twitter/X,
+  LinkedIn, Discord, iMessage etc. (from `src/app/opengraph-image.tsx`)
+
+Offline support (service worker) is intentionally deferred - caching
+journal data safely needs careful design to avoid serving stale rows.
+
 ## Scripts
 
 | Script | Description |
