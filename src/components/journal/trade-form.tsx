@@ -159,6 +159,38 @@ export function TradeForm({ initial, onSaved, onCancel }: Props) {
     userTypedPnl,
   ]);
 
+  // Profile defaults: fetch on mount. Applies preferred_session and
+  // default_pair to the form ONLY when creating a new trade (not
+  // editing) and only when the user hasn't touched those fields yet.
+  // Non-fatal: if the fetch fails, the form stays as-is.
+  useEffect(() => {
+    if (isEdit) return; // editing an existing trade - don't override
+    let active = true;
+    fetch("/api/profile")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((profile) => {
+        if (!active || !profile) return;
+        setForm((f) => ({
+          ...f,
+          // Only override fields the user hasn't touched (still empty
+          // or at their initial values).
+          session: f.session === "" && profile.preferred_session
+            ? profile.preferred_session
+            : f.session,
+          pair: f.pair === "EURUSD" && profile.default_pair
+            ? profile.default_pair
+            : f.pair,
+        }));
+      })
+      .catch(() => {
+        // Profile fetch failed - form stays with built-in defaults.
+      });
+    return () => {
+      active = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // run once on mount
+
   const set = <K extends keyof FormState>(k: K, v: FormState[K]) => {
     setForm((f) => ({ ...f, [k]: v }));
   };

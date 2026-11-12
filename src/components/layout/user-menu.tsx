@@ -22,6 +22,7 @@ import { cn } from "@/lib/utils";
 
 export function UserMenu({ className }: { className?: string }) {
   const [email, setEmail] = useState<string | null>(null);
+  const [displayName, setDisplayName] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
 
@@ -35,7 +36,20 @@ export function UserMenu({ className }: { className?: string }) {
     supabase.auth
       .getUser()
       .then(({ data }) => {
-        if (active) setEmail(data.user?.email ?? null);
+        if (!active) return;
+        setEmail(data.user?.email ?? null);
+        // Fetch the profile to show display_name when set (Phase 16).
+        // Non-fatal: on failure we just show the email.
+        return fetch("/api/profile")
+          .then((r) => (r.ok ? r.json() : null))
+          .then((profile) => {
+            if (active && profile?.display_name) {
+              setDisplayName(profile.display_name);
+            }
+          })
+          .catch(() => {
+            // Ignore - show email instead.
+          });
       })
       .catch(() => {
         if (active) setEmail(null);
@@ -77,14 +91,19 @@ export function UserMenu({ className }: { className?: string }) {
     );
   }
 
+  // Show display_name when set; fall back to email. The title tooltip
+  // always shows the email so the user can still see which account
+  // they're on.
+  const label = displayName ?? email ?? "";
+
   return (
     <div className={cn("flex items-center justify-between gap-2 min-w-0", className)}>
       <span
         className="truncate text-xs text-muted-foreground"
         title={email}
-        aria-label={`Signed in as ${email}`}
+        aria-label={`Signed in as ${displayName ?? email}`}
       >
-        {email}
+        {label}
       </span>
       <Button
         variant="ghost"
