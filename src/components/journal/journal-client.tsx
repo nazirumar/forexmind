@@ -18,7 +18,7 @@
  * we use it instead of re-fetching, to keep the UI snappy.
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Plus, Pencil, Trash2, Loader2, AlertTriangle, BookOpen, RefreshCw, BarChart3, ListOrdered } from "lucide-react";
+import { Plus, Pencil, Trash2, Loader2, AlertTriangle, BookOpen, RefreshCw, BarChart3, ListOrdered, Hash } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -71,14 +71,19 @@ import {
   formatPair,
   formatDate,
   timeAgo,
+  applyTradeFilter,
+  isFilterEmpty,
+  EMPTY_FILTER,
+  OUTCOME_FILTERS,
+  SESSIONS,
   type TradeRow,
   type TradeListResponse,
   type TradeStats,
+  type TradeFilter,
+  type OutcomeFilter,
   PAIRS,
 } from "@/lib/trades/schema";
 import { cn } from "@/lib/utils";
-
-type Filter = { pair: string; direction: string };
 
 export function JournalClient() {
   const [loaded, setLoaded] = useState(false);
@@ -86,8 +91,10 @@ export function JournalClient() {
   const [stats, setStats] = useState<TradeStats | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [authRequired, setAuthRequired] = useState(false);
+  /** Distinct tags the user has used, for the tag-filter dropdown. */
+  const [allTags, setAllTags] = useState<string[]>([]);
 
-  const [filter, setFilter] = useState<Filter>({ pair: "all", direction: "all" });
+  const [filter, setFilter] = useState<TradeFilter>(EMPTY_FILTER);
   const [view, setView] = useState<"trades" | "analytics">("trades");
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<TradeRow | null>(null);
@@ -120,18 +127,34 @@ export function JournalClient() {
     }
   }, []);
 
+  // Fetch the user's tag vocabulary in parallel with the trades list.
+  // Non-fatal: if this fails we just render an empty tag dropdown.
+  const loadTags = useCallback(async () => {
+    try {
+      const res = await fetch("/api/trades/tags");
+      if (!res.ok) return;
+      const body = await res.json().catch(() => null);
+      if (Array.isArray(body?.tags)) setAllTags(body.tags as string[]);
+    } catch {
+      // ignore - dropdown just stays empty.
+    }
+  }, []);
+
   useEffect(() => {
     void load();
-  }, [load]);
+    void loadTags();
+  }, [load, loadTags]);
 
-  // Apply client-side filters over the loaded page.
-  const filtered = useMemo(() => {
-    return trades.filter((t) => {
-      if (filter.pair !== "all" && t.pair !== filter.pair) return false;
-      if (filter.direction !== "all" && t.direction !== filter.direction) return false;
-      return true;
-    });
-  }, [trades, filter]);
+  // Refresh the tag vocabulary whenever a trade is saved (so a newly
+  // added tag appears in the filter dropdown without a manual refresh).
+  const refreshTags = useCallback(() => {
+    void loadTags();
+  }, [loadTags]);
+
+  // Apply client-side filters over the loaded page. The pure helper
+  // mirrors the server-side filter in /api/trades, so a refetch with
+  // query params would yield the same rows.
+  const filtered = useMemo(() => applyTradeFilter(trades, filter), [trades, filter]);
 
   // Recompute stats over the filtered subset so the panel reflects
   // what the user is actually looking at.
@@ -163,6 +186,8 @@ export function JournalClient() {
       next[idx] = saved;
       return next.sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
     });
+    // A new/edited trade may have introduced a tag we haven't seen yet.
+    refreshTags();
   };
 
   const handleDelete = async () => {
@@ -312,8 +337,10 @@ export function JournalClient() {
         <div className="mt-6 flex flex-wrap items-center gap-2">
           <span className="text-xs text-muted-foreground">Filter:</span>
           <Select
-            value={filter.pair}
-            onValueChange={(v) => setFilter((f) => ({ ...f, pair: v }))}
+            value={filter.pair ?? "all"}
+            onValueChange={(v) =>
+              setFilter((f) => ({ ...f, pair: v === "all" ? null : v }))
+            }
           >
             <SelectTrigger className="h-8 w-[140px] text-xs" aria-label="Filter by pair">
               <SelectValue placeholder="All pairs" />
@@ -329,23 +356,120 @@ export function JournalClient() {
           </Select>
           <Select
             value={filter.direction}
-            onValueChange={(v) => setFilter((f) => ({ ...f, direction: v }))}
+            onValueChange={(v) =>
+              setFilter((f) => ({
+                ...f,
+                direction: v as TradeFilter["direction"],
+              }))
+            }
           >
             <SelectTrigger className="h-8 w-[110px] text-xs" aria-label="Filter by direction">
               <SelectValue placeholder="Direction" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="all">All</SelectItem>
+              <SelectItem value="all">All sides</SelectItem>
               <SelectItem value="buy">Buys</SelectItem>
               <SelectItem value="sell">Sells</SelectItem>
             </SelectContent>
           </Select>
-          {(filter.pair !== "all" || filter.direction !== "all") && (
+          <Select
+            value={filter.tag ?? "all"}
+            onValueChange={(v) =>
+              setFilter((f) => ({ ...f, tag: v === "all" ? null : v }))
+            }
+          >
+            <SelectTrigger className="h-8 w-[140px] text-xs" aria-label="Filter by tag">
+              <SelectValue placeholder="All tags" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All tags</SelectItem>
+              {allTags.length === 0 ? (
+                <SelectItem value="__none" disabled>
+                  No tags yet
+                </SelectItem>
+              ) : (
+                allTags.map((t) => (
+                  <SelectItem key={t} value={t}>
+                    #{t}
+                  </SelectItem>
+                ))
+              )}
+            </SelectContent>
+          </Select>
+          <Select
+            value={filter.session}
+            onValueChange={(v) =>
+              setFilter((f) => ({
+                ...f,
+                session: v as TradeFilter["session"],
+              }))
+            }
+          >
+            <SelectTrigger className="h-8 w-[120px] text-xs" aria-label="Filter by session">
+              <SelectValue placeholder="Session" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All sessions</SelectItem>
+              {SESSIONS.map((s) => (
+                <SelectItem key={s} value={s}>
+                  {s[0].toUpperCase() + s.slice(1)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Select
+            value={filter.outcome}
+            onValueChange={(v) =>
+              setFilter((f) => ({
+                ...f,
+                outcome: v as OutcomeFilter,
+              }))
+            }
+          >
+            <SelectTrigger className="h-8 w-[120px] text-xs" aria-label="Filter by outcome">
+              <SelectValue placeholder="Outcome" />
+            </SelectTrigger>
+            <SelectContent>
+              {OUTCOME_FILTERS.map((o) => (
+                <SelectItem key={o} value={o}>
+                  {o === "all"
+                    ? "All outcomes"
+                    : o[0].toUpperCase() + o.slice(1)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Select
+            value={
+              filter.followedPlan === null
+                ? "all"
+                : filter.followedPlan
+                  ? "yes"
+                  : "no"
+            }
+            onValueChange={(v) =>
+              setFilter((f) => ({
+                ...f,
+                followedPlan:
+                  v === "all" ? null : v === "yes" ? true : false,
+              }))
+            }
+          >
+            <SelectTrigger className="h-8 w-[120px] text-xs" aria-label="Filter by plan discipline">
+              <SelectValue placeholder="Plan" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All plan</SelectItem>
+              <SelectItem value="yes">Followed</SelectItem>
+              <SelectItem value="no">Broke</SelectItem>
+            </SelectContent>
+          </Select>
+          {!isFilterEmpty(filter) && (
             <Button
               variant="ghost"
               size="sm"
               className="h-8 text-xs"
-              onClick={() => setFilter({ pair: "all", direction: "all" })}
+              onClick={() => setFilter(EMPTY_FILTER)}
             >
               Clear
             </Button>
@@ -405,6 +529,7 @@ export function JournalClient() {
                     <TableHead className="text-right">Exit</TableHead>
                     <TableHead className="text-right">Lots</TableHead>
                     <TableHead className="text-right">PnL</TableHead>
+                    <TableHead>Tags</TableHead>
                     <TableHead>Opened</TableHead>
                     <TableHead className="text-center">Plan</TableHead>
                     <TableHead className="w-[100px] text-right">Actions</TableHead>
@@ -545,6 +670,32 @@ function TradeRowItem({
         )}
       >
         {formatMoney(trade.pnl)}
+      </TableCell>
+      <TableCell>
+        {trade.tags && trade.tags.length > 0 ? (
+          <div className="flex flex-wrap gap-1 max-w-[180px]">
+            {trade.tags.slice(0, 3).map((tag) => (
+              <span
+                key={tag}
+                className="inline-flex items-center gap-0.5 rounded-sm bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground"
+                title={tag}
+              >
+                <Hash className="h-2.5 w-2.5" aria-hidden="true" />
+                {tag}
+              </span>
+            ))}
+            {trade.tags.length > 3 && (
+              <span
+                className="inline-flex items-center rounded-sm bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground"
+                title={trade.tags.slice(3).join(", ")}
+              >
+                +{trade.tags.length - 3}
+              </span>
+            )}
+          </div>
+        ) : (
+          <span className="text-xs text-muted-foreground">—</span>
+        )}
       </TableCell>
       <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
         <span title={formatDate(trade.opened_at)}>

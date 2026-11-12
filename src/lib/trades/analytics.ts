@@ -141,6 +141,79 @@ export function perSessionStats(trades: TradeRow[]): SessionStat[] {
 }
 
 // ---------------------------------------------------------------------------
+// Per-tag breakdown (Phase 18)
+// ---------------------------------------------------------------------------
+
+export type TagStat = {
+  tag: string;
+  total: number;
+  winners: number;
+  losers: number;
+  /** Winners / total. 0 when no closed trades carry this tag. */
+  winRate: number;
+  /** Sum of pnl across all closed trades carrying this tag. */
+  netPnl: number;
+  /** Average pnl per closed trade carrying this tag. */
+  avgPnl: number;
+};
+
+/**
+ * Group closed trades by tag.
+ *
+ * A trade with multiple tags contributes to every tag's bucket - e.g.
+ * a winning trade tagged ["fomc", "breakout"] counts once in "fomc"
+ * and once in "breakout". The sum of `total` across buckets can
+ * therefore exceed the input trade count.
+ *
+ * Trades with no tags (or null pnl / open trades) are skipped.
+ *
+ * Returns an array sorted by total trades descending (the tags the
+ * user uses most appear first), with net PnL as a tiebreaker. Pure.
+ */
+export function perTagStats(trades: TradeRow[]): TagStat[] {
+  const groups = new Map<string, TradeRow[]>();
+  for (const t of trades) {
+    if (t.pnl == null || !Number.isFinite(t.pnl)) continue;
+    const tags = t.tags ?? [];
+    if (tags.length === 0) continue;
+    for (const tag of tags) {
+      if (typeof tag !== "string" || tag === "") continue;
+      const arr = groups.get(tag) ?? [];
+      arr.push(t);
+      groups.set(tag, arr);
+    }
+  }
+
+  const out: TagStat[] = [];
+  for (const [tag, rows] of groups) {
+    let winners = 0;
+    let losers = 0;
+    let net = 0;
+    for (const t of rows) {
+      net += t.pnl as number;
+      if ((t.pnl as number) > 0) winners += 1;
+      else losers += 1;
+    }
+    out.push({
+      tag,
+      total: rows.length,
+      winners,
+      losers,
+      winRate: rows.length > 0 ? winners / rows.length : 0,
+      netPnl: net,
+      avgPnl: rows.length > 0 ? net / rows.length : 0,
+    });
+  }
+
+  // Most-used tags first, then by net PnL descending.
+  out.sort((a, b) => {
+    if (b.total !== a.total) return b.total - a.total;
+    return b.netPnl - a.netPnl;
+  });
+  return out;
+}
+
+// ---------------------------------------------------------------------------
 // Drawdown series
 // ---------------------------------------------------------------------------
 

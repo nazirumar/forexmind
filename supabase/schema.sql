@@ -227,3 +227,44 @@ drop policy if exists "trade_plans_delete_own" on public.trade_plans;
 create policy "trade_plans_delete_own"
   on public.trade_plans for delete
   using (auth.uid () = user_id);
+
+-- ============================================================
+-- Phase 18: trade tags + multi-filter analytics
+-- ============================================================
+-- Adds a `tags` array column to public.trades so users can label
+-- each trade with arbitrary keywords (setup name, market condition,
+-- mistake type, etc.). The tags power a new tag-breakdown analytics
+-- card and a multi-filter bar in the journal UI.
+--
+-- Storage: text[] (Postgres native array). Empty array is the
+-- default for rows created before this migration (the `COALESCE`
+-- pattern in queries keeps older code working without a backfill).
+--
+-- Search: a GIN index on `tags` makes `tags ? 'foo'` (array contains)
+-- cheap, which is what the /api/trades filter uses.
+--
+-- Constraints enforced in app code (zod), not at the DB level, to
+-- keep the migration trivial:
+--  - max 10 tags per trade
+--  - max 30 chars per tag
+--  - lowercased, trimmed, deduped
+--  - allowed chars: letters, digits, dash, underscore (slug-style)
+-- ============================================================
+
+alter table public.trades
+  add column if not exists tags text[] not null default '{}';
+
+comment on column public.trades.tags is
+  'User-defined labels for this trade (e.g. "breakout", "fomc", "revenge"). Empty array when untagged.';
+
+-- GIN index for "array contains" lookups: WHERE tags ? 'breakout'.
+-- `using gin` with the operator class `array_ops` (the default for
+-- text[]) supports both `?` (contains-element) and `@>` (contains-array).
+create index if not exists trades_tags_gin_idx
+  on public.trades using gin (tags);
+
+-- Also a composite index for the common "filter by tag, newest first"
+-- journal query. The GIN above handles the tag predicate; this btree
+-- handles the order-by-created_at within a user.
+create index if not exists trades_user_tag_created_idx
+  on public.trades (user_id, created_at desc) where array_length(tags, 1) is not null;

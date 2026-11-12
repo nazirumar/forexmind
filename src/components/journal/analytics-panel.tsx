@@ -30,12 +30,20 @@ import { Badge } from "@/components/ui/badge";
 import {
   perPairStats,
   perSessionStats,
+  perTagStats,
   drawdownSeries,
   pnlDistribution,
   perWeekdayStats,
   analyticsSummary,
 } from "@/lib/trades/analytics";
-import { equityCurve, formatMoney, formatPair, type TradeRow } from "@/lib/trades/schema";
+import {
+  equityCurve,
+  formatMoney,
+  formatPair,
+  formatPct,
+  type TradeRow,
+} from "@/lib/trades/schema";
+import { Hash } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 type Props = {
@@ -70,6 +78,7 @@ export function AnalyticsPanel({ trades }: Props) {
   const sessions = useMemo(() => perSessionStats(trades), [trades]);
   const buckets = useMemo(() => pnlDistribution(trades), [trades]);
   const weekdays = useMemo(() => perWeekdayStats(trades), [trades]);
+  const tags = useMemo(() => perTagStats(trades), [trades]);
   const equity = useMemo(() => equityCurve(trades), [trades]);
 
   // Equity curve: we use drawdownSeries because it includes both
@@ -482,6 +491,79 @@ export function AnalyticsPanel({ trades }: Props) {
           </Card>
         )}
       </div>
+
+      {/* Tag breakdown (Phase 18) */}
+      {tags.length > 0 && (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base flex items-center gap-1.5">
+              <Hash className="h-4 w-4" aria-hidden="true" />
+              Per-tag breakdown
+            </CardTitle>
+            <p className="text-xs text-muted-foreground">
+              A trade with multiple tags counts in every bucket. Look for
+              tags with low win rates or large negative net PnL - those are
+              the setups worth re-examining.
+            </p>
+          </CardHeader>
+          <CardContent>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-left text-xs text-muted-foreground">
+                    <th className="pb-2 font-medium">Tag</th>
+                    <th className="pb-2 text-right font-medium">Trades</th>
+                    <th className="pb-2 text-right font-medium">Win rate</th>
+                    <th className="pb-2 text-right font-medium">Net PnL</th>
+                    <th className="pb-2 text-right font-medium">Avg PnL</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {tags.map((t) => (
+                    <tr key={t.tag} className="border-t border-border/50">
+                      <td className="py-2">
+                        <span className="inline-flex items-center gap-0.5 font-medium">
+                          <Hash className="h-3 w-3 text-muted-foreground" aria-hidden="true" />
+                          {t.tag}
+                        </span>
+                      </td>
+                      <td className="py-2 text-right tabular-nums">{t.total}</td>
+                      <td className="py-2 text-right tabular-nums">
+                        <span
+                          className={cn(
+                            t.winRate >= 0.5
+                              ? "text-emerald-500"
+                              : t.winRate > 0
+                                ? "text-amber-500"
+                                : "text-muted-foreground",
+                          )}
+                        >
+                          {formatPct(t.winRate)}
+                        </span>
+                      </td>
+                      <td
+                        className={cn(
+                          "py-2 text-right tabular-nums font-medium",
+                          t.netPnl > 0
+                            ? "text-emerald-500"
+                            : t.netPnl < 0
+                              ? "text-rose-500"
+                              : "text-muted-foreground",
+                        )}
+                      >
+                        {formatMoney(t.netPnl)}
+                      </td>
+                      <td className="py-2 text-right tabular-nums text-muted-foreground">
+                        {formatMoney(t.avgPnl)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Holding time + plan discipline summary */}
       <Card>

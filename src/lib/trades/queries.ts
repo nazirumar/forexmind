@@ -22,7 +22,10 @@ import type { User } from "@supabase/supabase-js";
 import {
   computeStats,
   tradeRowSchema,
+  EMPTY_FILTER,
+  isFilterEmpty,
   type TradeCreate,
+  type TradeFilter,
   type TradeUpdate,
   type TradeListResponse,
   type TradeRow,
@@ -81,6 +84,7 @@ export async function createTrade(input: TradeCreate): Promise<TradeRow> {
     emotion: input.emotion ?? null,
     followed_plan: input.followed_plan,
     notes: input.notes ?? null,
+    tags: input.tags ?? [],
   };
 
   const { data, error } = await supabase
@@ -137,6 +141,7 @@ export async function bulkCreateTrades(
     emotion: input.emotion ?? null,
     followed_plan: input.followed_plan,
     notes: input.notes ?? null,
+    tags: input.tags ?? [],
   }));
 
   const { data, error } = await supabase
@@ -157,20 +162,79 @@ export async function bulkCreateTrades(
 /**
  * List the user's trades, most-recent-created first.
  *
- * - `limit` capped at MAX_LIST_LIMIT (200). Past that, we'd add cursor
- *   pagination (Phase X+).
- * - Stats computed server-side so the client can render the
- *   dashboard-style header in a single round-trip.
+ *  - `limit` capped at MAX_LIST_LIMIT (200). Past that, we'd add cursor
+ *    pagination (Phase X+).
+ *  - `filter` (optional): structured filter on pair / direction / tag /
+ *    session / strategy / outcome / followed_plan / opened_at range.
+ *    Empty filter (the default) returns the unfiltered page, matching
+ *    the pre-Phase-18 behavior.
+ *  - Stats computed server-side so the client can render the
+ *    dashboard-style header in a single round-trip.
+ *
+ * The filter is applied at the database layer (Supabase query builder)
+ * so a 200-trade user filtering by tag "fomc" only receives the
+ * matching rows over the wire, not the whole table.
  */
-export async function listTrades(limit = 100): Promise<TradeListResponse> {
+export async function listTrades(
+  limit = 100,
+  filter: TradeFilter = EMPTY_FILTER,
+): Promise<TradeListResponse> {
   const { supabase } = await context();
   const capped = Math.max(1, Math.min(MAX_LIST_LIMIT, Math.floor(limit)));
 
-  const { data, error } = await supabase
+  let q = supabase
     .from("trades")
     .select("*")
     .order("created_at", { ascending: false })
     .limit(capped);
+
+  // Apply each filter dimension only when set, so an empty filter
+  // produces the exact same query as before Phase 18.
+  if (!isFilterEmpty(filter)) {
+    if (filter.pair !== null) q = q.eq("pair", filter.pair);
+    if (filter.direction !== "all") q = q.eq("direction", filter.direction);
+    if (filter.tag !== null) {
+      // Array-contains: Postgres `tags ? :tag` via Supabase's `.contains`
+      // (which maps to `@>`). Wrapped in an array because @> expects an
+      // array on the right side. GIN index `trades_tags_gin_idx` covers it.
+      q = q.contains("tags", [filter.tag]);
+    }
+    if (filter.session !== "all") q = q.eq("session", filter.session);
+    if (filter.strategy !== null) {
+      // Case-insensitive exact match. ilike with no wildcards = eq CI.
+      q = q.ilike("strategy", filter.strategy);
+    }
+    if (filter.followedPlan !== null) {
+      q = q.eq("followed_plan", filter.followedPlan);
+    }
+    if (filter.openedFrom !== null) q = q.gte("opened_at", filter.openedFrom);
+    if (filter.openedTo !== null) q = q.lte("opened_at", filter.openedTo);
+    switch (filter.outcome) {
+      case "win":
+        // Closed and pnl > 0.
+        q = q.not("pnl", "is", null).gt("pnl", 0);
+        break;
+      case "loss":
+        // Closed and pnl <= 0. (Breakeven counts as a loss here, matching
+        // the win-rate convention in computeStats.)
+        q = q.not("pnl", "is", null).lte("pnl", 0);
+        break;
+      case "open":
+        // Still running: no closed_at OR no realized pnl yet. We treat
+        // either condition as "open" since a trade could be closed at
+        // the broker but not yet logged with a PnL.
+        q = q.or("closed_at.is.null,pnl.is.null");
+        break;
+      case "breakeven":
+        q = q.eq("pnl", 0);
+        break;
+      case "all":
+      default:
+        break;
+    }
+  }
+
+  const { data, error } = await q;
 
   if (error) {
     throw new TradesError(500, `Failed to list trades: ${error.message}`);
@@ -187,6 +251,42 @@ export async function listTrades(limit = 100): Promise<TradeListResponse> {
     stats,
     hasMore: trades.length === capped, // hint, not authoritative
   };
+}
+
+/**
+ * Return the distinct set of tags the user has ever used across their
+ * trades, sorted alphabetically. Used to populate the tag filter
+ * dropdown in the journal UI.
+ *
+ * Implementation note: we fetch only the `tags` column for all the
+ * user's trades (capped at MAX_LIST_LIMIT) and union the arrays in JS.
+ * A `select tags` keeps the payload tiny even for 200 trades. A future
+ * optimization could push this into a SQL `unnest` + `distinct` via an
+ * RPC, but for a single-user journal this is plenty fast.
+ */
+export async function listAllTags(): Promise<string[]> {
+  const { supabase } = await context();
+
+  const { data, error } = await supabase
+    .from("trades")
+    .select("tags")
+    .limit(MAX_LIST_LIMIT);
+
+  if (error) {
+    throw new TradesError(500, `Failed to list tags: ${error.message}`);
+  }
+  if (!data) return [];
+
+  const set = new Set<string>();
+  for (const row of data as unknown as Array<{ tags: string[] | null }>) {
+    const tags = row?.tags;
+    if (Array.isArray(tags)) {
+      for (const tag of tags) {
+        if (typeof tag === "string" && tag !== "") set.add(tag);
+      }
+    }
+  }
+  return [...set].sort((a, b) => a.localeCompare(b));
 }
 
 /**

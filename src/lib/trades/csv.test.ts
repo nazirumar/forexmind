@@ -37,6 +37,7 @@ function makeRow(overrides: Partial<TradeRow> = {}): TradeRow {
     followed_plan: true,
     notes: "test note",
     created_at: "2026-01-15T08:30:00Z",
+    tags: [],
     ...overrides,
   };
 }

@@ -124,7 +124,18 @@ const EXPECTED_COLUMNS = [
   "emotion",
   "followed_plan",
   "notes",
+  "tags",
 ] as const;
+
+/**
+ * Tag separator used inside a CSV cell.
+ *
+ * CSV cells can't contain a bare comma (it would split the column),
+ * so tags within a single cell are joined with a pipe. We accept pipe
+ * or semicolon on import for tolerance. The cell is always quoted on
+ * export, so embedded pipes are safe.
+ */
+const CSV_TAG_SEPARATOR = "|";
 
 /**
  * Parse a CSV string into a list of trades + errors.
@@ -226,6 +237,12 @@ function normalizeField(col: string, raw: string): unknown {
     case "emotion":
     case "notes":
       return raw;
+    case "tags":
+      // Pass the raw string through; tradeCreateSchema's `tags` field
+      // accepts a string and runs normalizeTags on it (splitting on
+      // pipe / semicolon / comma / whitespace). Returning undefined
+      // for an empty cell keeps the create schema's default ([]) intact.
+      return raw === "" ? undefined : raw;
     default:
       return raw;
   }
@@ -291,6 +308,14 @@ export function tradesToCsv(trades: TradeRow[]): string {
 /** Format a single field for CSV output (always quoted). */
 function formatCsvField(val: unknown): string {
   if (val == null) return '""';
+  if (Array.isArray(val)) {
+    // Tags column: join with the CSV tag separator (pipe). Each
+    // element is escaped like a normal string field, then we re-quote
+    // the whole joined value.
+    if (val.length === 0) return '""';
+    const joined = val.map((v) => String(v).replace(/"/g, '""')).join(CSV_TAG_SEPARATOR);
+    return `"${joined}"`;
+  }
   if (typeof val === "boolean") return val ? '"true"' : '"false"';
   if (typeof val === "number") {
     // Use full precision; CSV consumers (Excel, Sheets) handle it.
@@ -326,6 +351,7 @@ export function buildCsvTemplate(): string {
     "calm",
     "true",
     "Waited for London open breakout above 1.0845",
+    "breakout|london-open",
   ];
   const header = EXPECTED_COLUMNS.join(",");
   const exampleLine = example.map((f) => `"${f}"`).join(",");

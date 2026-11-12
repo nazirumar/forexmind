@@ -20,8 +20,8 @@
  *  - "Exit price" auto-suggests PnL via pip math when entered; the
  *    user can still override the suggested value.
  */
-import { useState, useEffect, FormEvent } from "react";
-import { Loader2, AlertTriangle } from "lucide-react";
+import { useState, useEffect, FormEvent, KeyboardEvent } from "react";
+import { Loader2, AlertTriangle, X, Hash } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -39,6 +39,8 @@ import {
   PAIRS,
   SESSIONS,
   formatPair,
+  normalizeTags,
+  MAX_TAGS,
   type TradeRow,
 } from "@/lib/trades/schema";
 import {
@@ -72,6 +74,8 @@ type FormState = {
   emotion: string;
   followed_plan: boolean;
   notes: string;
+  /** Slugified, deduped tags. Empty array when untagged. */
+  tags: string[];
 };
 
 type FieldErrors = Record<string, string>;
@@ -132,6 +136,7 @@ export function TradeForm({ initial, onSaved, onCancel }: Props) {
     emotion: initial?.emotion ?? "",
     followed_plan: initial?.followed_plan ?? true,
     notes: initial?.notes ?? "",
+    tags: initial?.tags ?? [],
   }));
 
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
@@ -195,6 +200,57 @@ export function TradeForm({ initial, onSaved, onCancel }: Props) {
     setForm((f) => ({ ...f, [k]: v }));
   };
 
+  // --- Tags input (chips) ---
+  // The user types in <input>; pressing Enter or comma "commits" the
+  // current text as one or more tags (normalizeTags splits on commas /
+  // whitespace, slugifies, dedupes). Backspace on an empty input
+  // removes the last chip. Tags are capped at MAX_TAGS.
+  const [tagDraft, setTagDraft] = useState("");
+
+  const commitTagDraft = () => {
+    const trimmed = tagDraft.trim();
+    if (trimmed === "") return;
+    const newTags = normalizeTags([trimmed]);
+    if (newTags.length === 0) {
+      setTagDraft("");
+      return;
+    }
+    setForm((f) => {
+      const existing = new Set(f.tags);
+      const merged = [...f.tags];
+      for (const t of newTags) {
+        if (existing.has(t)) continue;
+        if (merged.length >= MAX_TAGS) break;
+        existing.add(t);
+        merged.push(t);
+      }
+      return { ...f, tags: merged };
+    });
+    setTagDraft("");
+  };
+
+  const removeTag = (tag: string) => {
+    setForm((f) => ({ ...f, tags: f.tags.filter((t) => t !== tag) }));
+  };
+
+  const onTagKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter" || e.key === ",") {
+      // Prevent form submit on Enter; commit the draft instead.
+      e.preventDefault();
+      commitTagDraft();
+      return;
+    }
+    if (
+      e.key === "Backspace" &&
+      tagDraft === "" &&
+      form.tags.length > 0
+    ) {
+      // Backspace on empty input removes the last chip.
+      e.preventDefault();
+      setForm((f) => ({ ...f, tags: f.tags.slice(0, -1) }));
+    }
+  };
+
   const onSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setFormError(null);
@@ -218,6 +274,9 @@ export function TradeForm({ initial, onSaved, onCancel }: Props) {
     if (form.session) payload.session = form.session;
     if (form.emotion.trim()) payload.emotion = form.emotion.trim();
     if (form.notes.trim()) payload.notes = form.notes.trim();
+    // Always send tags (the schema defaults to [], but sending it
+    // explicitly lets an edit clear all tags by sending []).
+    payload.tags = form.tags;
 
     setSubmitting(true);
     try {
@@ -519,6 +578,54 @@ export function TradeForm({ initial, onSaved, onCancel }: Props) {
         />
         {fieldErrors.notes && (
           <p className="text-xs text-destructive">{fieldErrors.notes}</p>
+        )}
+      </div>
+
+      {/* Tags */}
+      <div className="space-y-1.5">
+        <Label htmlFor="tags">Tags</Label>
+        <div className="flex flex-wrap items-center gap-1.5 rounded-md border border-input bg-background px-2 py-1.5 focus-within:ring-2 focus-within:ring-ring">
+          {form.tags.map((tag) => (
+            <span
+              key={tag}
+              className="inline-flex items-center gap-1 rounded-sm bg-primary/10 px-1.5 py-0.5 text-xs font-medium text-primary"
+            >
+              <Hash className="h-3 w-3" aria-hidden="true" />
+              {tag}
+              <button
+                type="button"
+                onClick={() => removeTag(tag)}
+                className="ml-0.5 inline-flex h-3.5 w-3.5 items-center justify-center rounded-sm hover:bg-primary/20"
+                aria-label={`Remove tag ${tag}`}
+              >
+                <X className="h-3 w-3" aria-hidden="true" />
+              </button>
+            </span>
+          ))}
+          {form.tags.length < MAX_TAGS && (
+            <input
+              id="tags"
+              type="text"
+              value={tagDraft}
+              onChange={(e) => setTagDraft(e.target.value)}
+              onKeyDown={onTagKeyDown}
+              onBlur={commitTagDraft}
+              placeholder={
+                form.tags.length === 0
+                  ? "fomc, breakout, trend..."
+                  : "add tag (Enter or comma)"
+              }
+              className="min-w-[120px] flex-1 border-0 bg-transparent p-0 text-sm outline-none placeholder:text-muted-foreground focus:ring-0"
+              aria-label="Add tag"
+            />
+          )}
+        </div>
+        <p className="text-[11px] text-muted-foreground">
+          Press Enter or comma to add. Up to {MAX_TAGS} tags. Letters,
+          numbers, dashes, underscores; spaces become dashes.
+        </p>
+        {fieldErrors.tags && (
+          <p className="text-xs text-destructive">{fieldErrors.tags}</p>
         )}
       </div>
 
