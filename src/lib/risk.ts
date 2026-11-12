@@ -315,6 +315,47 @@ export function breakEvenWinRate(rr: number): number {
 }
 
 // ---------------------------------------------------------------------------
+// Realized R-multiple (Feature 1: risk foundation)
+// ---------------------------------------------------------------------------
+
+/**
+ * Realized R-multiple for a closed trade.
+ *
+ *     R = pnl / risk_amount
+ *
+ * A trade that risked $100 and made $200 = +2R. One that lost $100 = -1R.
+ * This is the unit professional traders think in: it normalises results
+ * across different position sizes and account balances so a $50 win on
+ * a $25 risk (+2R) beats a $500 win on a $500 risk (+1R).
+ *
+ * Returns null when pnl or risk_amount is missing / non-positive. A
+ * risk_amount of 0 (a "no-stop" trade) makes R undefined; we surface
+ * that as null so the UI shows "n/a" rather than Infinity.
+ */
+export function computeRMultiple(
+  pnl: number | null | undefined,
+  riskAmount: number | null | undefined,
+): number | null {
+  if (pnl == null || riskAmount == null) return null;
+  if (!isFinite(pnl) || !isFinite(riskAmount) || riskAmount <= 0) return null;
+  return pnl / riskAmount;
+}
+
+/**
+ * Planned R-multiple from reward and risk in a common unit (pips).
+ * Same math as riskRewardRatio, named for the "how many R is my
+ * target?" framing used in the risk dashboard.
+ *
+ *     plannedR = rewardPips / riskPips
+ */
+export function plannedRMultiple(
+  riskPips: number,
+  rewardPips: number,
+): number {
+  return riskRewardRatio(riskPips, rewardPips);
+}
+
+// ---------------------------------------------------------------------------
 // Validation helpers (for the UI)
 // ---------------------------------------------------------------------------
 

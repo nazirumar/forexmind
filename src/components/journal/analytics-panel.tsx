@@ -34,6 +34,9 @@ import {
   drawdownSeries,
   pnlDistribution,
   perWeekdayStats,
+  perTimeframeStats,
+  perStrategyStats,
+  perHourStats,
   analyticsSummary,
 } from "@/lib/trades/analytics";
 import {
@@ -79,6 +82,9 @@ export function AnalyticsPanel({ trades }: Props) {
   const buckets = useMemo(() => pnlDistribution(trades), [trades]);
   const weekdays = useMemo(() => perWeekdayStats(trades), [trades]);
   const tags = useMemo(() => perTagStats(trades), [trades]);
+  const timeframes = useMemo(() => perTimeframeStats(trades), [trades]);
+  const strategies = useMemo(() => perStrategyStats(trades), [trades]);
+  const hours = useMemo(() => perHourStats(trades), [trades]);
   const equity = useMemo(() => equityCurve(trades), [trades]);
 
   // Equity curve: we use drawdownSeries because it includes both
@@ -491,6 +497,129 @@ export function AnalyticsPanel({ trades }: Props) {
           </Card>
         )}
       </div>
+
+      {/* Per-timeframe + per-strategy (Feature 5) */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {timeframes.some((t) => t.total > 0) && (
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-base">Win rate by timeframe</CardTitle>
+              <p className="text-xs text-muted-foreground">
+                Are you profitable on H4 but losing on M5? The chart timeframe you trade best.
+              </p>
+            </CardHeader>
+            <CardContent>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-left text-xs text-muted-foreground">
+                      <th className="pb-2 font-medium">TF</th>
+                      <th className="pb-2 text-right font-medium">Trades</th>
+                      <th className="pb-2 text-right font-medium">Win %</th>
+                      <th className="pb-2 text-right font-medium">Net PnL</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {timeframes.filter((t) => t.total > 0).map((t) => (
+                      <tr key={t.timeframe} className="border-t border-border/50">
+                        <td className="py-2 font-medium">{t.timeframe === "unspecified" ? "—" : t.timeframe}</td>
+                        <td className="py-2 text-right tabular-nums">{t.total}</td>
+                        <td className={cn("py-2 text-right tabular-nums", t.winRate >= 0.5 ? "text-emerald-500" : t.winRate > 0 ? "text-amber-500" : "text-muted-foreground")}>
+                          {formatPct(t.winRate)}
+                        </td>
+                        <td className={cn("py-2 text-right tabular-nums font-medium", t.netPnl > 0 ? "text-emerald-500" : t.netPnl < 0 ? "text-rose-500" : "text-muted-foreground")}>
+                          {formatMoney(t.netPnl)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {strategies.length > 0 && (
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-base">Per-strategy net PnL</CardTitle>
+              <p className="text-xs text-muted-foreground">
+                Which named strategies actually make money? Sort is by net PnL.
+              </p>
+            </CardHeader>
+            <CardContent>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-left text-xs text-muted-foreground">
+                      <th className="pb-2 font-medium">Strategy</th>
+                      <th className="pb-2 text-right font-medium">Trades</th>
+                      <th className="pb-2 text-right font-medium">Win %</th>
+                      <th className="pb-2 text-right font-medium">Net PnL</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {strategies.slice(0, 8).map((s) => (
+                      <tr key={s.strategy} className="border-t border-border/50">
+                        <td className="py-2 font-medium truncate max-w-[120px]">{s.strategy}</td>
+                        <td className="py-2 text-right tabular-nums">{s.total}</td>
+                        <td className={cn("py-2 text-right tabular-nums", s.winRate >= 0.5 ? "text-emerald-500" : s.winRate > 0 ? "text-amber-500" : "text-muted-foreground")}>
+                          {formatPct(s.winRate)}
+                        </td>
+                        <td className={cn("py-2 text-right tabular-nums font-medium", s.netPnl > 0 ? "text-emerald-500" : s.netPnl < 0 ? "text-rose-500" : "text-muted-foreground")}>
+                          {formatMoney(s.netPnl)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+      </div>
+
+      {/* Per-hour-of-day (Feature 5) */}
+      {hours.some((h) => h.total > 0) && (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base">Net PnL by hour of day (UTC)</CardTitle>
+            <p className="text-xs text-muted-foreground">
+              &quot;I lose between 13:00–15:00 UTC&quot; pattern detection. Hours with no trades are zero.
+            </p>
+          </CardHeader>
+          <CardContent>
+            <ChartContainer config={WEEKDAY_CONFIG} className="aspect-[4/1] w-full">
+              <BarChart data={hours} margin={{ top: 4, right: 16, bottom: 4, left: 8 }}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                <XAxis dataKey="label" tick={{ fontSize: 9 }} tickLine={false} axisLine={false} interval={1} />
+                <YAxis tickFormatter={(v) => `$${v}`} tick={{ fontSize: 10 }} tickLine={false} axisLine={false} width={50} />
+                <ChartTooltip
+                  content={
+                    <ChartTooltipContent
+                      formatter={(value, _name, item) => {
+                        const p = item.payload as { total: number };
+                        return (
+                          <div className="text-xs">
+                            <div className="font-medium">{formatMoney(Number(value))}</div>
+                            <div className="text-muted-foreground">{p.total} trades</div>
+                          </div>
+                        );
+                      }}
+                    />
+                  }
+                />
+                <ReferenceLine y={0} stroke="hsl(var(--border))" />
+                <Bar dataKey="netPnl" radius={3} isAnimationActive={false}>
+                  {hours.map((entry, idx) => (
+                    <Cell key={idx} fill={entry.netPnl >= 0 ? "hsl(var(--chart-2))" : "hsl(var(--destructive))"} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ChartContainer>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Tag breakdown (Phase 18) */}
       {tags.length > 0 && (

@@ -21,7 +21,7 @@
  *    user can still override the suggested value.
  */
 import { useState, useEffect, FormEvent, KeyboardEvent } from "react";
-import { Loader2, AlertTriangle, X, Hash } from "lucide-react";
+import { Loader2, AlertTriangle, X, Hash, Camera, Calculator, Newspaper } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -38,6 +38,8 @@ import { Checkbox } from "@/components/ui/checkbox";
 import {
   PAIRS,
   SESSIONS,
+  TIMEFRAMES,
+  MISTAKE_TYPES,
   formatPair,
   normalizeTags,
   MAX_TAGS,
@@ -47,7 +49,9 @@ import {
   pipSize,
   priceDiffInPips,
   pipValuePerLot,
+  positionSize,
 } from "@/lib/risk";
+import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 
 type Props = {
   /** Existing trade to edit, or null for create. */
@@ -76,6 +80,16 @@ type FormState = {
   notes: string;
   /** Slugified, deduped tags. Empty array when untagged. */
   tags: string[];
+  // ---- Risk-management fields (Feature 1) ----
+  account_balance: string;
+  risk_pct: string;
+  risk_amount: string;
+  timeframe: string;
+  // ---- Psychology (Feature 2) ----
+  mistake_type: string;
+  // ---- Screenshots (Feature 2): Storage URLs ----
+  screenshot_url: string;
+  screenshot_after_url: string;
 };
 
 type FieldErrors = Record<string, string>;
@@ -137,6 +151,17 @@ export function TradeForm({ initial, onSaved, onCancel }: Props) {
     followed_plan: initial?.followed_plan ?? true,
     notes: initial?.notes ?? "",
     tags: initial?.tags ?? [],
+    // Risk-management fields (Feature 1).
+    account_balance:
+      initial?.account_balance != null ? String(initial.account_balance) : "",
+    risk_pct: initial?.risk_pct != null ? String(initial.risk_pct) : "",
+    risk_amount:
+      initial?.risk_amount != null ? String(initial.risk_amount) : "",
+    timeframe: initial?.timeframe ?? "",
+    // Psychology + screenshots (Feature 2).
+    mistake_type: initial?.mistake_type ?? "",
+    screenshot_url: initial?.screenshot_url ?? "",
+    screenshot_after_url: initial?.screenshot_after_url ?? "",
   }));
 
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
@@ -195,6 +220,140 @@ export function TradeForm({ initial, onSaved, onCancel }: Props) {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // run once on mount
+
+  // ---- News-aware risk overlay (Feature 4) ----
+  // Fetch the economic calendar once on mount, then warn whenever the
+  // trade's opened_at falls within ±2h of a high-impact event (NFP,
+  // FOMC, CPI, etc.). Red-flag news is the #1 reason disciplined
+  // traders skip a setup.
+  const [newsWarning, setNewsWarning] = useState<string | null>(null);
+  const [highImpactEvents, setHighImpactEvents] = useState<
+    { time: string; title: string }[]
+  >([]);
+
+  useEffect(() => {
+    let active = true;
+    fetch("/api/calendar")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((cal) => {
+        if (!active || !cal?.events) return;
+        const hi = (cal.events as Array<{ time: string; title: string; impact: string }>)
+          .filter((e) => e.impact === "high")
+          .map((e) => ({ time: e.time, title: e.title }));
+        setHighImpactEvents(hi);
+      })
+      .catch(() => {
+        // Calendar fetch failed - no warning, not fatal.
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!form.opened_at || highImpactEvents.length === 0) {
+      setNewsWarning(null);
+      return;
+    }
+    const t = Date.parse(localInputToIso(form.opened_at));
+    if (Number.isNaN(t)) {
+      setNewsWarning(null);
+      return;
+    }
+    const windowMs = 2 * 60 * 60_000; // ±2h
+    const near = highImpactEvents.find((e) => {
+      const et = Date.parse(e.time);
+      return !Number.isNaN(et) && Math.abs(et - t) <= windowMs;
+    });
+    setNewsWarning(
+      near
+        ? `High-impact event "${near.title}" within ±2h of this trade's open time. Consider skipping or reducing size.`
+        : null,
+    );
+  }, [form.opened_at, highImpactEvents]);
+
+  // ---- Position-sizing calculator (Feature 1) ----
+  // Derived from account_balance + risk_pct + entry/stop distance, using
+  // the same pure positionSize() the risk-calculator page uses. The
+  // user clicks "Apply" to fill lot_size + risk_amount in one go.
+  const calcInputs = (() => {
+    const balance = Number(form.account_balance);
+    const riskPct = Number(form.risk_pct);
+    const entry = Number(form.entry_price);
+    const sl = Number(form.stop_loss);
+    if (
+      !isFinite(balance) || balance <= 0 ||
+      !isFinite(riskPct) || riskPct <= 0 ||
+      !isFinite(entry) || entry <= 0 ||
+      !isFinite(sl) || sl <= 0 ||
+      entry === sl
+    ) {
+      return null;
+    }
+    const stopPips = priceDiffInPips(form.pair, entry, sl);
+    const pipValue = pipValuePerLot(form.pair, entry);
+    if (!isFinite(stopPips) || stopPips <= 0 || !isFinite(pipValue) || pipValue <= 0) {
+      return null;
+    }
+    const lots = positionSize(balance, riskPct, stopPips, pipValue);
+    const riskAmount = balance * (riskPct / 100);
+    return { lots, riskAmount, stopPips, pipValue };
+  })();
+
+  const applyPositionSize = () => {
+    if (!calcInputs) return;
+    setForm((f) => ({
+      ...f,
+      lot_size: calcInputs.lots.toFixed(2),
+      risk_amount: calcInputs.riskAmount.toFixed(2),
+    }));
+  };
+
+  // ---- Screenshot upload (Feature 2) ----
+  // Uploads to the `trade-screenshots` Storage bucket under
+  // `<uid>/<timestamp>-<before|after>.png`. RLS ensures only the owner
+  // can write to their prefix. The returned public URL is stored on the
+  // trade row.
+  const [uploading, setUploading] = useState<"before" | "after" | null>(null);
+
+  const uploadScreenshot = async (
+    file: File,
+    which: "before" | "after",
+  ) => {
+    setUploading(which);
+    try {
+      const supabase = createSupabaseBrowserClient();
+      const { data: userData } = await supabase.auth.getUser();
+      const uid = userData.user?.id;
+      if (!uid) {
+        setFormError("You must be signed in to upload screenshots.");
+        return;
+      }
+      const ext = file.name.split(".").pop()?.toLowerCase() ?? "png";
+      const path = `${uid}/${Date.now()}-${which}.${ext}`;
+      const { error: upErr } = await supabase.storage
+        .from("trade-screenshots")
+        .upload(path, file, { upsert: false });
+      if (upErr) {
+        setFormError(`Screenshot upload failed: ${upErr.message}`);
+        return;
+      }
+      const { data: pub } = supabase.storage
+        .from("trade-screenshots")
+        .getPublicUrl(path);
+      const url = pub.publicUrl;
+      setForm((f) => ({
+        ...f,
+        [which === "before" ? "screenshot_url" : "screenshot_after_url"]: url,
+      }));
+    } catch (err) {
+      setFormError(
+        err instanceof Error ? `Upload error: ${err.message}` : "Upload failed.",
+      );
+    } finally {
+      setUploading(null);
+    }
+  };
 
   const set = <K extends keyof FormState>(k: K, v: FormState[K]) => {
     setForm((f) => ({ ...f, [k]: v }));
@@ -278,6 +437,16 @@ export function TradeForm({ initial, onSaved, onCancel }: Props) {
     // explicitly lets an edit clear all tags by sending []).
     payload.tags = form.tags;
 
+    // Risk-management fields (Feature 1).
+    if (form.account_balance) payload.account_balance = Number(form.account_balance);
+    if (form.risk_pct) payload.risk_pct = Number(form.risk_pct);
+    if (form.risk_amount) payload.risk_amount = Number(form.risk_amount);
+    if (form.timeframe) payload.timeframe = form.timeframe;
+    // Psychology + screenshots (Feature 2).
+    if (form.mistake_type) payload.mistake_type = form.mistake_type;
+    if (form.screenshot_url) payload.screenshot_url = form.screenshot_url;
+    if (form.screenshot_after_url) payload.screenshot_after_url = form.screenshot_after_url;
+
     setSubmitting(true);
     try {
       const url = isEdit ? `/api/trades/${initial!.id}` : "/api/trades";
@@ -333,6 +502,17 @@ export function TradeForm({ initial, onSaved, onCancel }: Props) {
         >
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
           <span>{formError}</span>
+        </div>
+      )}
+
+      {/* News-aware risk overlay (Feature 4) */}
+      {newsWarning && (
+        <div
+          role="alert"
+          className="flex items-start gap-2 rounded-md border border-amber-500/50 bg-amber-500/10 px-3 py-2 text-sm text-amber-200"
+        >
+          <Newspaper className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+          <span>{newsWarning}</span>
         </div>
       )}
 
@@ -496,6 +676,75 @@ export function TradeForm({ initial, onSaved, onCancel }: Props) {
         </div>
       </div>
 
+      {/* Position-sizing calculator (Feature 1) */}
+      <div className="rounded-md border border-border bg-muted/30 p-3 space-y-2">
+        <div className="flex items-center gap-1.5 text-sm font-medium">
+          <Calculator className="h-4 w-4 text-primary" aria-hidden="true" />
+          Position-size calculator
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+          <div className="space-y-1">
+            <Label htmlFor="balance" className="text-xs">Account balance ($)</Label>
+            <Input
+              id="balance"
+              type="number"
+              inputMode="decimal"
+              step="any"
+              placeholder="10000"
+              value={form.account_balance}
+              onChange={(e) => set("account_balance", e.target.value)}
+            />
+          </div>
+          <div className="space-y-1">
+            <Label htmlFor="riskpct" className="text-xs">Risk %</Label>
+            <Input
+              id="riskpct"
+              type="number"
+              inputMode="decimal"
+              step="any"
+              placeholder="1.0"
+              value={form.risk_pct}
+              onChange={(e) => set("risk_pct", e.target.value)}
+            />
+          </div>
+          <div className="space-y-1">
+            <Label htmlFor="riskamt" className="text-xs">Risk amount ($)</Label>
+            <Input
+              id="riskamt"
+              type="number"
+              inputMode="decimal"
+              step="any"
+              placeholder="100"
+              value={form.risk_amount}
+              onChange={(e) => set("risk_amount", e.target.value)}
+            />
+          </div>
+          <div className="flex items-end">
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={applyPositionSize}
+              disabled={!calcInputs}
+              className="w-full"
+            >
+              Apply lot size
+            </Button>
+          </div>
+        </div>
+        {calcInputs ? (
+          <p className="text-[11px] text-muted-foreground">
+            SL = {calcInputs.stopPips.toFixed(0)} pips · pip value ${calcInputs.pipValue.toFixed(2)} →
+            suggested <span className="font-medium text-foreground">{calcInputs.lots.toFixed(2)} lots</span>{" "}
+            (${calcInputs.riskAmount.toFixed(2)} at risk).
+          </p>
+        ) : (
+          <p className="text-[11px] text-muted-foreground">
+            Enter balance, risk %, entry and stop loss to auto-compute lot size.
+          </p>
+        )}
+      </div>
+
       {/* Opened / Closed */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <div className="space-y-1.5">
@@ -566,6 +815,46 @@ export function TradeForm({ initial, onSaved, onCancel }: Props) {
         </div>
       </div>
 
+      {/* Timeframe + Mistake type (Features 1 + 2) */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div className="space-y-1.5">
+          <Label htmlFor="timeframe">Timeframe</Label>
+          <Select
+            value={form.timeframe || "none"}
+            onValueChange={(v) => set("timeframe", v === "none" ? "" : v)}
+          >
+            <SelectTrigger id="timeframe">
+              <SelectValue placeholder="—" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="none">— (none)</SelectItem>
+              {TIMEFRAMES.map((tf) => (
+                <SelectItem key={tf} value={tf}>{tf}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="mistake">Execution mistake</Label>
+          <Select
+            value={form.mistake_type || "none"}
+            onValueChange={(v) => set("mistake_type", v === "none" ? "" : v)}
+          >
+            <SelectTrigger id="mistake">
+              <SelectValue placeholder="—" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="none">— none / clean</SelectItem>
+              {MISTAKE_TYPES.filter((m) => m !== "none").map((m) => (
+                <SelectItem key={m} value={m}>
+                  {m.replace(/_/g, " ")}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+
       {/* Notes */}
       <div className="space-y-1.5">
         <Label htmlFor="notes">Notes</Label>
@@ -579,6 +868,88 @@ export function TradeForm({ initial, onSaved, onCancel }: Props) {
         {fieldErrors.notes && (
           <p className="text-xs text-destructive">{fieldErrors.notes}</p>
         )}
+      </div>
+
+      {/* Chart screenshots (Feature 2) */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div className="space-y-1.5">
+          <Label htmlFor="shot-before" className="flex items-center gap-1.5">
+            <Camera className="h-3.5 w-3.5" aria-hidden="true" /> Before screenshot
+          </Label>
+          {form.screenshot_url ? (
+            <div className="flex items-center gap-2">
+              <a
+                href={form.screenshot_url}
+                target="_blank"
+                rel="noreferrer"
+                className="text-xs text-primary underline truncate"
+              >
+                View uploaded chart
+              </a>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => set("screenshot_url", "")}
+              >
+                Remove
+              </Button>
+            </div>
+          ) : (
+            <Input
+              id="shot-before"
+              type="file"
+              accept="image/png,image/jpeg,image/webp"
+              disabled={uploading !== null}
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) uploadScreenshot(f, "before");
+              }}
+            />
+          )}
+          {uploading === "before" && (
+            <p className="text-[11px] text-muted-foreground">Uploading…</p>
+          )}
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="shot-after" className="flex items-center gap-1.5">
+            <Camera className="h-3.5 w-3.5" aria-hidden="true" /> After screenshot
+          </Label>
+          {form.screenshot_after_url ? (
+            <div className="flex items-center gap-2">
+              <a
+                href={form.screenshot_after_url}
+                target="_blank"
+                rel="noreferrer"
+                className="text-xs text-primary underline truncate"
+              >
+                View uploaded chart
+              </a>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => set("screenshot_after_url", "")}
+              >
+                Remove
+              </Button>
+            </div>
+          ) : (
+            <Input
+              id="shot-after"
+              type="file"
+              accept="image/png,image/jpeg,image/webp"
+              disabled={uploading !== null}
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) uploadScreenshot(f, "after");
+              }}
+            />
+          )}
+          {uploading === "after" && (
+            <p className="text-[11px] text-muted-foreground">Uploading…</p>
+          )}
+        </div>
       </div>
 
       {/* Tags */}

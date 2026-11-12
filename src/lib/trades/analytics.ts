@@ -15,7 +15,7 @@
  *  - All money values are account-currency (USD) - same convention
  *    as the rest of the app.
  */
-import type { TradeRow, Session } from "@/lib/trades/schema";
+import type { TradeRow, Session, Timeframe } from "@/lib/trades/schema";
 
 // ---------------------------------------------------------------------------
 // Per-pair breakdown
@@ -516,4 +516,160 @@ export function analyticsSummary(trades: TradeRow[]): AnalyticsSummary {
     avgHoldMinutes,
     closedCount: closed.length,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Per-timeframe breakdown (Feature 5)
+// ---------------------------------------------------------------------------
+
+export type TimeframeStat = {
+  timeframe: Timeframe | "unspecified";
+  total: number;
+  winners: number;
+  losers: number;
+  winRate: number;
+  netPnl: number;
+};
+
+const TIMEFRAME_ORDER: Timeframe[] = ["M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1"];
+
+/**
+ * Group closed trades by chart timeframe.
+ *
+ * Trades with no timeframe go into "unspecified". Returns entries in
+ * canonical timeframe order (M1..W1) then unspecified last. Pure.
+ */
+export function perTimeframeStats(trades: TradeRow[]): TimeframeStat[] {
+  const groups = new Map<string, TradeRow[]>();
+  for (const t of trades) {
+    if (t.pnl == null || !Number.isFinite(t.pnl)) continue;
+    const key = (t.timeframe ?? "unspecified") as string;
+    const arr = groups.get(key) ?? [];
+    arr.push(t);
+    groups.set(key, arr);
+  }
+
+  const out: TimeframeStat[] = [];
+  for (const tf of TIMEFRAME_ORDER) {
+    const rows = groups.get(tf);
+    if (!rows) continue;
+    const { total, winners, losers, netPnl } = summarize(rows);
+    out.push({ timeframe: tf, total, winners, losers, winRate: winners / total, netPnl });
+  }
+  const unspec = groups.get("unspecified");
+  if (unspec) {
+    const { total, winners, losers, netPnl } = summarize(unspec);
+    out.push({ timeframe: "unspecified", total, winners, losers, winRate: winners / total, netPnl });
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Per-strategy breakdown (Feature 5)
+// ---------------------------------------------------------------------------
+
+export type StrategyStat = {
+  strategy: string;
+  total: number;
+  winners: number;
+  losers: number;
+  winRate: number;
+  netPnl: number;
+  avgPnl: number;
+};
+
+/**
+ * Group closed trades by the free-form `strategy` field.
+ *
+ * Trades with no strategy are skipped (the user didn't label them, so a
+ * "blank strategy" bucket would be noise). Returns an array sorted by
+ * net PnL descending (best strategy first). Pure.
+ */
+export function perStrategyStats(trades: TradeRow[]): StrategyStat[] {
+  const groups = new Map<string, TradeRow[]>();
+  for (const t of trades) {
+    if (t.pnl == null || !Number.isFinite(t.pnl)) continue;
+    if (!t.strategy) continue;
+    const key = t.strategy;
+    const arr = groups.get(key) ?? [];
+    arr.push(t);
+    groups.set(key, arr);
+  }
+
+  const out: StrategyStat[] = [];
+  for (const [strategy, rows] of groups) {
+    const { total, winners, losers, netPnl } = summarize(rows);
+    out.push({ strategy, total, winners, losers, winRate: winners / total, netPnl, avgPnl: netPnl / total });
+  }
+  out.sort((a, b) => b.netPnl - a.netPnl);
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Per-hour-of-day breakdown (Feature 5)
+// ---------------------------------------------------------------------------
+
+export type HourStat = {
+  /** 0..23 (UTC hour of the trade's opened_at). */
+  hour: number;
+  label: string;
+  total: number;
+  winners: number;
+  losers: number;
+  winRate: number;
+  netPnl: number;
+};
+
+/**
+ * Group closed trades by the UTC hour they were OPENED.
+ *
+ * Useful for "I lose money between 13:00-15:00 UTC" patterns. Returns
+ * 24 entries (0..23) in hour order, even for hours with no trades.
+ * Pure.
+ */
+export function perHourStats(trades: TradeRow[]): HourStat[] {
+  const buckets: HourStat[] = Array.from({ length: 24 }, (_, h) => ({
+    hour: h,
+    label: `${String(h).padStart(2, "0")}:00`,
+    total: 0,
+    winners: 0,
+    losers: 0,
+    winRate: 0,
+    netPnl: 0,
+  }));
+
+  for (const t of trades) {
+    if (t.pnl == null || !Number.isFinite(t.pnl)) continue;
+    if (!t.opened_at) continue;
+    const d = new Date(t.opened_at);
+    if (Number.isNaN(d.getTime())) continue;
+    const h = d.getUTCHours();
+    const b = buckets[h]!;
+    b.total += 1;
+    b.netPnl += t.pnl;
+    if ((t.pnl as number) > 0) b.winners += 1;
+    else b.losers += 1;
+  }
+  for (const b of buckets) {
+    b.winRate = b.total > 0 ? b.winners / b.total : 0;
+  }
+  return buckets;
+}
+
+// ---------------------------------------------------------------------------
+// Shared helper
+// ---------------------------------------------------------------------------
+
+function summarize(rows: TradeRow[]): {
+  total: number; winners: number; losers: number; netPnl: number;
+} {
+  let winners = 0;
+  let losers = 0;
+  let netPnl = 0;
+  for (const t of rows) {
+    netPnl += t.pnl as number;
+    if ((t.pnl as number) > 0) winners += 1;
+    else losers += 1;
+  }
+  return { total: rows.length, winners, losers, netPnl };
 }

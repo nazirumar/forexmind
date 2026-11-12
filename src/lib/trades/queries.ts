@@ -31,6 +31,7 @@ import {
   type TradeRow,
   type TradeStats,
 } from "@/lib/trades/schema";
+import { computeRMultiple } from "@/lib/risk";
 
 /**
  * Error class that carries an HTTP-ish status. Route handlers catch
@@ -85,6 +86,17 @@ export async function createTrade(input: TradeCreate): Promise<TradeRow> {
     followed_plan: input.followed_plan,
     notes: input.notes ?? null,
     tags: input.tags ?? [],
+    // Risk-management fields (Feature 1).
+    account_balance: input.account_balance ?? null,
+    risk_pct: input.risk_pct ?? null,
+    risk_amount: input.risk_amount ?? null,
+    timeframe: input.timeframe ?? null,
+    // Psychology + screenshots (Feature 2).
+    mistake_type: input.mistake_type ?? null,
+    screenshot_url: input.screenshot_url ?? null,
+    screenshot_after_url: input.screenshot_after_url ?? null,
+    // Server-computed realized R (null until both pnl + risk_amount known).
+    r_multiple: computeRMultiple(input.pnl ?? null, input.risk_amount ?? null),
   };
 
   const { data, error } = await supabase
@@ -142,6 +154,14 @@ export async function bulkCreateTrades(
     followed_plan: input.followed_plan,
     notes: input.notes ?? null,
     tags: input.tags ?? [],
+    account_balance: input.account_balance ?? null,
+    risk_pct: input.risk_pct ?? null,
+    risk_amount: input.risk_amount ?? null,
+    timeframe: input.timeframe ?? null,
+    mistake_type: input.mistake_type ?? null,
+    screenshot_url: input.screenshot_url ?? null,
+    screenshot_after_url: input.screenshot_after_url ?? null,
+    r_multiple: computeRMultiple(input.pnl ?? null, input.risk_amount ?? null),
   }));
 
   const { data, error } = await supabase

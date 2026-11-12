@@ -15,6 +15,7 @@ import {
   Target,
   GitCompareArrows,
   Eye,
+  Gauge,
   Settings,
   type LucideIcon,
 } from "lucide-react";
@@ -44,6 +45,12 @@ export const NAV_ITEMS: NavItem[] = [
     href: "/risk-calculator",
     icon: Calculator,
     description: "Position size, RR, pip value",
+  },
+  {
+    label: "Risk Dashboard",
+    href: "/risk",
+    icon: Gauge,
+    description: "R-multiples, expectancy, exposure",
   },
   {
     label: "Trade Journal",

@@ -23,6 +23,29 @@ export type Direction = (typeof DIRECTIONS)[number];
 export const SESSIONS = ["asian", "london", "newyork", "overlap"] as const;
 export type Session = (typeof SESSIONS)[number];
 
+/** Chart timeframes offered in the journal + analytics. */
+export const TIMEFRAMES = [
+  "M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1",
+] as const;
+export type Timeframe = (typeof TIMEFRAMES)[number];
+
+/**
+ * Self-tagged execution mistake types. Used by the psychology analytics
+ * to surface a trader's recurring leak (e.g. "you moved your stop on
+ * 40% of losing trades"). "none" is the default for clean trades.
+ */
+export const MISTAKE_TYPES = [
+  "none",
+  "moved_stop",
+  "oversized",
+  "chased_entry",
+  "early_exit",
+  "late_entry",
+  "revenge",
+  "no_stop",
+] as const;
+export type MistakeType = (typeof MISTAKE_TYPES)[number];
+
 /** Forex pairs offered in the journal dropdown. Matches the risk
  *  calculator so a user thinks about one list across the app. */
 export const PAIRS = [
@@ -240,6 +263,72 @@ const tradeBaseFields = {
   tags: z
     .preprocess((v) => normalizeTags(v), z.array(z.string().min(1).max(MAX_TAG_LEN)))
     .default([]),
+  /**
+   * ---- Risk-management fields (Feature 1) ----
+   * All optional: a trade can be logged without them, but when present
+   * they power R-multiple analytics, expectancy and the equity-in-R
+   * curve. risk_amount is the $ at risk if SL is hit; risk_pct is that
+   * same figure expressed as a % of account_balance.
+   */
+  account_balance: z
+    .number()
+    .finite()
+    .min(0, "Account balance cannot be negative.")
+    .max(1_000_000_000, "Account balance looks too large.")
+    .optional()
+    .nullable()
+    .transform((s) => (s === null ? null : s)),
+  risk_pct: z
+    .number()
+    .finite()
+    .min(0, "Risk % cannot be negative.")
+    .max(100, "Risk % cannot exceed 100.")
+    .optional()
+    .nullable()
+    .transform((s) => (s === null ? null : s)),
+  risk_amount: z
+    .number()
+    .finite()
+    .min(0, "Risk amount cannot be negative.")
+    .max(1_000_000_000, "Risk amount looks too large.")
+    .optional()
+    .nullable()
+    .transform((s) => (s === null ? null : s)),
+  timeframe: z
+    .preprocess(
+      (v) => (v === "" || v == null ? null : v),
+      z.enum(TIMEFRAMES).nullable(),
+    )
+    .optional(),
+  /**
+   * ---- Psychology field (Feature 2) ----
+   * Self-tagged execution mistake. "none" or null = clean trade.
+   */
+  mistake_type: z
+    .preprocess(
+      (v) => (v === "" || v == null ? null : v),
+      z.enum(MISTAKE_TYPES).nullable(),
+    )
+    .optional(),
+  /**
+   * ---- Chart screenshots (Feature 2) ----
+   * Public URLs into the `trade-screenshots` Storage bucket. The path
+   * is `<user_id>/<trade_id>-before.png`. Nullable until uploaded.
+   */
+  screenshot_url: z
+    .string()
+    .trim()
+    .max(2000, "Screenshot URL is too long.")
+    .optional()
+    .nullable()
+    .transform((s) => (s === "" || s == null ? null : s)),
+  screenshot_after_url: z
+    .string()
+    .trim()
+    .max(2000, "Screenshot URL is too long.")
+    .optional()
+    .nullable()
+    .transform((s) => (s === "" || s == null ? null : s)),
 };
 
 const tradeBaseObject = z.object(tradeBaseFields);
@@ -323,6 +412,17 @@ export const tradeRowSchema = z.object({
    * "array of strings" here.
    */
   tags: z.array(z.string()).default([]),
+  // Risk-management fields (Feature 1). Nullable for older rows.
+  account_balance: z.number().nullable().optional(),
+  risk_pct: z.number().nullable().optional(),
+  risk_amount: z.number().nullable().optional(),
+  /** Server-computed on close: pnl / risk_amount. Null until both known. */
+  r_multiple: z.number().nullable().optional(),
+  timeframe: z.enum(TIMEFRAMES).nullable().optional(),
+  // Psychology + screenshots (Feature 2).
+  mistake_type: z.enum(MISTAKE_TYPES).nullable().optional(),
+  screenshot_url: z.string().nullable().optional(),
+  screenshot_after_url: z.string().nullable().optional(),
 });
 export type TradeRow = z.infer<typeof tradeRowSchema>;
 
