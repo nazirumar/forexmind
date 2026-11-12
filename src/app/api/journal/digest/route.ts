@@ -16,10 +16,10 @@ import { NextResponse } from "next/server";
 import { getGroq, GROQ_MODEL_MAIN, isGroqConfigured } from "@/lib/groq";
 import { SYSTEM_PROMPT_WEEKLY_DIGEST } from "@/lib/prompts";
 import { UnauthorizedError, getUserOrThrow, enforceRateLimit } from "@/lib/auth";
-import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { db } from "@/lib/db";
+import { fetchUserTrades } from "@/lib/trades/queries";
 import { digestRequestSchema, digestResponseSchema, type DigestResponse } from "@/lib/journal/schema";
 import { detectPatterns, buildDigestDataBlock } from "@/lib/journal/digest-patterns";
-import { tradeRowSchema, type TradeRow } from "@/lib/trades/schema";
 import type { ChatCompletionMessageParam } from "groq-sdk/resources/chat/completions";
 
 export const runtime = "nodejs";
@@ -54,25 +54,16 @@ export async function POST(req: Request) {
       );
     }
 
-    // Fetch trades in the window.
+    // Fetch trades in the window, oldest first. user.id is needed later
+    // to persist the digest row; fetchUserTrades authenticates itself.
     const user = await getUserOrThrow();
-    const supabase = await createSupabaseServerClient();
-    const { data, error } = await supabase
-      .from("trades")
-      .select("*")
-      .eq("user_id", user.id)
-      .gte("opened_at", from.toISOString())
-      .lte("opened_at", to.toISOString())
-      .order("opened_at", { ascending: true });
-
-    if (error) {
-      return NextResponse.json(
-        { error: `Failed to load trades: ${error.message}` },
-        { status: 500, headers: rateHeaders },
-      );
-    }
-
-    const trades: TradeRow[] = (data ?? []).map((d) => tradeRowSchema.parse(d));
+    const trades = await fetchUserTrades({
+      openedFrom: from,
+      openedTo: to,
+      orderBy: "openedAt",
+      order: "asc",
+      limit: 500,
+    });
     const patterns = detectPatterns(trades);
     const windowStart = from.toISOString();
     const windowEnd = to.toISOString();
@@ -134,17 +125,16 @@ export async function POST(req: Request) {
     // Save to ai_analyses (best-effort).
     const output = JSON.stringify({ summary, insights, question });
     try {
-      const { data: saved } = await supabase
-        .from("ai_analyses")
-        .insert({
-          user_id: user.id,
+      const saved = await db.aiAnalysis.create({
+        data: {
+          userId: user.id,
           type: "weekly_digest",
-          input_summary: dataBlock.slice(0, 2000),
+          inputSummary: dataBlock.slice(0, 2000),
           output,
-        })
-        .select("id")
-        .single();
-      analysisId = saved?.id ?? null;
+        },
+        select: { id: true },
+      });
+      analysisId = saved.id;
     } catch (err) {
       console.warn("[/api/journal/digest] save failed:", err);
     }

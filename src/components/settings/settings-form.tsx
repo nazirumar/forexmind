@@ -11,8 +11,9 @@
  * risk calculator / journal will fall back to their own hardcoded
  * defaults.
  *
- * Sandboxed users (no Supabase configured) see an auth-required
- * banner instead of the form.
+ * The form is always usable; /api/profile (Prisma-backed) returns 401
+ * when there's no session, in which case the form stays empty and a
+ * save attempt surfaces a "Sign in to save your settings" error.
  */
 import { useEffect, useState, FormEvent } from "react";
 import { Settings, Loader2, AlertTriangle, CheckCircle2, Save } from "lucide-react";
@@ -29,7 +30,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { PAIRS, SESSIONS, type ProfileRow } from "@/lib/profile/schema";
-import { isSupabaseConfigured } from "@/lib/supabase/config";
 
 type FormState = {
   display_name: string;
@@ -40,7 +40,6 @@ type FormState = {
 };
 
 export function SettingsForm() {
-  const configured = isSupabaseConfigured();
   const [profile, setProfile] = useState<ProfileRow | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [form, setForm] = useState<FormState>({
@@ -55,12 +54,9 @@ export function SettingsForm() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!configured) {
-      setLoaded(true);
-      return;
-    }
     void load();
-  }, [configured]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const load = async () => {
     try {
@@ -150,30 +146,6 @@ export function SettingsForm() {
       setSaving(false);
     }
   };
-
-  if (!configured) {
-    return (
-      <>
-        <PageHeader
-          title="Settings"
-          description="Edit your display name and default trading parameters."
-          icon={<Settings className="h-5 w-5" />}
-        />
-        <Card className="mt-6 border-amber-500/40 bg-amber-500/5">
-          <CardContent className="flex items-start gap-3 py-4 text-sm text-amber-200">
-            <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" aria-hidden="true" />
-            <div>
-              <p className="font-medium">Sign in to use Settings.</p>
-              <p className="text-xs opacity-90 mt-1">
-                Configure Supabase (see <code>docs/supabase-setup.md</code>) and
-                sign in to edit your profile and trading defaults.
-              </p>
-            </div>
-          </CardContent>
-        </Card>
-      </>
-    );
-  }
 
   if (!loaded) {
     return (

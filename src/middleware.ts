@@ -1,102 +1,55 @@
 /**
- * Next.js middleware: Supabase session refresh + auth guard.
+ * Next.js middleware: session-cookie auth guard.
  *
- * What it does on every matched request:
- *  1. Creates a Supabase server client wired to the request cookies.
- *  2. Calls supabase.auth.getUser() - this both validates the JWT and
- *     refreshes the session cookies when they rotate.
- *  3. Redirects signed-out users to /login for ALL app pages, and
- *     signed-in users away from /login and /signup to /.
+ * Replaces the Supabase session-refresh middleware. Middleware runs on
+ * the Edge runtime, where Node's `crypto` (HMAC) is unavailable, so
+ * this guard checks the *presence* of the `forexmind_session` cookie
+ * purely for redirect UX. The real signature verification happens
+ * server-side in getUserOrThrow() (Node runtime) on every protected
+ * route + server component - a tampered cookie passes this guard but
+ * is rejected with 401 by every data call. So the middleware is UX,
+ * not a security boundary.
  *
- * Not configured fallback: if Supabase env vars are missing (or the
- * sandbox placeholder values are still set), the guard is skipped so
- * the app remains usable in preview. Set real values in .env.local
- * to enforce authentication. This is intentional dev ergonomics; in
- * production the values are always set, so the guard is always on.
- *
- * Runtime: edge (default). No secrets beyond the public anon key are
- * used here.
+ * Behaviour:
+ *  - No cookie + protected path -> redirect to /login.
+ *  - Cookie present + /login or /signup -> redirect to /.
+ *  - Otherwise: pass through.
  */
-import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
-const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
-// Publishable key (newer Supabase projects) with fallback to the
-// legacy anon key name so both setups work.
-const SUPABASE_PUBLISHABLE_KEY =
-  process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ??
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ??
-  "";
-
-function isSupabaseConfigured(): boolean {
-  return Boolean(SUPABASE_URL && SUPABASE_PUBLISHABLE_KEY) &&
-    !SUPABASE_URL.includes("placeholder") &&
-    !SUPABASE_PUBLISHABLE_KEY.includes("placeholder");
-}
-
-/** Pages reachable without a session. */
+const SESSION_COOKIE = "forexmind_session";
 const PUBLIC_PATHS = new Set(["/login", "/signup"]);
 
-export async function middleware(request: NextRequest) {
-  if (!isSupabaseConfigured()) {
-    // Dev/preview fallback: no real Supabase -> no auth enforcement.
-    return NextResponse.next();
-  }
-
-  let supabaseResponse = NextResponse.next({ request });
-
-  const supabase = createServerClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
-    cookies: {
-      getAll() {
-        return request.cookies.getAll();
-      },
-      setAll(cookiesToSet) {
-        cookiesToSet.forEach(({ name, value }) => {
-          request.cookies.set(name, value);
-        });
-        supabaseResponse = NextResponse.next({ request });
-        cookiesToSet.forEach(({ name, value, options }) => {
-          supabaseResponse.cookies.set(name, value, options);
-        });
-      },
-    },
-  });
-
-  // IMPORTANT: do not run any code between client creation and getUser().
-  const { data: { user } } = await supabase.auth.getUser();
-
+export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
   const isPublic = PUBLIC_PATHS.has(pathname);
+  const hasSession = Boolean(request.cookies.get(SESSION_COOKIE)?.value);
 
-  // Signed-out -> /login for everything except the public auth pages.
-  if (!user && !isPublic) {
+  // Signed-out (no cookie) -> /login for protected pages.
+  if (!hasSession && !isPublic) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
-    url.search = ""; // drop any query params from the protected page
+    url.search = "";
     return NextResponse.redirect(url);
   }
 
   // Signed-in -> keep them out of /login and /signup.
-  if (user && isPublic) {
+  if (hasSession && isPublic) {
     const url = request.nextUrl.clone();
     url.pathname = "/";
     url.search = "";
     return NextResponse.redirect(url);
   }
 
-  // Forward refreshed cookies to the app + browser.
-  return supabaseResponse;
+  return NextResponse.next();
 }
 
 export const config = {
   matcher: [
     /*
-     * Run on all pages except:
-     *  - _next/static, _next/image (build assets)
-     *  - favicon & image files
-     *  - /api/* (route handlers authenticate themselves via getUserOrThrow)
-     *  - /auth/callback (email-confirmation code exchange; the handler
-     *    manages its own cookies and must not be redirected)
+     * Run on all pages except build assets, images, API routes (they
+     * authenticate themselves via getUserOrThrow) and /auth/callback
+     * (kept for legacy redirect compatibility).
      */
     "/((?!_next/static|_next/image|favicon\\.ico|api/|auth/callback|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico)$).*)",
   ],

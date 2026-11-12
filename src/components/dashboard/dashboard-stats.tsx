@@ -1,64 +1,49 @@
 /**
  * Server component - renders a small "Today in your journal" panel
  * for signed-in users. Renders nothing (returns null) when the user
- * is not signed in OR Supabase is not configured, so the dashboard
- * degrades to the static tool cards + "does/doesn't do" panel that
- * already exists.
+ * is not signed in, so the dashboard degrades to the static tool cards
+ * + "does/doesn't do" panel that already exists.
  *
- * Stats are pulled directly from the Supabase server client (RLS
- * scopes them to the calling user). We don't go through /api/trades
- * because that would be a redundant HTTP round-trip from a Server
- * Component.
+ * Stats are pulled directly from the Prisma-backed fetchUserTrades
+ * helper (which scopes by the authenticated user). We don't go through
+ * /api/trades because that would be a redundant HTTP round-trip from a
+ * Server Component.
  */
 import Link from "next/link";
 import { TrendingUp, TrendingDown, Activity, BookOpen, ArrowRight } from "lucide-react";
-import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { getUserOrNull } from "@/lib/auth";
-import { isSupabaseConfigured } from "@/lib/supabase/config";
+import { fetchUserTrades } from "@/lib/trades/queries";
 import { computeStats, formatMoney, formatPct, formatRatio, type TradeRow } from "@/lib/trades/schema";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 
 export async function DashboardStats() {
-  // Fast exit when Supabase is not configured (sandbox / preview).
-  if (!isSupabaseConfigured()) return null;
-
+  // No signed-in user -> hide the section (the rest of the dashboard is
+  // still useful to anonymous visitors).
   const user = await getUserOrNull();
   if (!user) return null;
 
-  const supabase = await createSupabaseServerClient();
-
-  // Pull the user's 5 most recent trades for the "recent trades" list.
-  // Stats are computed over the full set (we limit at 100 which is more
-  // than enough for a dashboard summary).
-  const [recentRes, statsRes] = await Promise.all([
-    supabase
-      .from("trades")
-      .select("*")
-      .order("created_at", { ascending: false })
-      .limit(5),
-    supabase
-      .from("trades")
-      .select("*")
-      .order("created_at", { ascending: false })
-      .limit(100),
-  ]);
-
-  // If both queries failed (e.g. table doesn't exist yet), hide the
-  // section instead of crashing the dashboard.
-  if (recentRes.error || statsRes.error) {
-    console.warn("[dashboard] stats query failed:", statsRes.error?.message);
+  // Pull up to 100 of the user's most-recent trades. The first 5 power
+  // the "recent trades" list; the full set drives the summary stats.
+  // fetchUserTrades calls getUserOrThrow internally, so we gate on
+  // getUserOrNull above first to avoid a thrown UnauthorizedError.
+  let trades: TradeRow[] = [];
+  try {
+    trades = await fetchUserTrades({ limit: 100 });
+  } catch (err) {
+    // If the query fails (e.g. table not migrated yet), hide the
+    // section instead of crashing the dashboard.
+    console.warn("[dashboard] stats query failed:", err);
     return null;
   }
 
-  const recent = (recentRes.data ?? []) as unknown as TradeRow[];
-  const all = (statsRes.data ?? []) as unknown as TradeRow[];
-  if (all.length === 0) {
+  if (trades.length === 0) {
     // Empty journal - show a friendly CTA to add a trade.
     return <EmptyJournalCTA />;
   }
 
-  const stats = computeStats(all);
+  const recent = trades.slice(0, 5);
+  const stats = computeStats(trades);
   const netPositive = stats.netPnl > 0;
 
   return (

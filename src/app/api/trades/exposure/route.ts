@@ -14,39 +14,25 @@
  */
 import { NextResponse } from "next/server";
 import { UnauthorizedError, getUserOrThrow, enforceRateLimit } from "@/lib/auth";
-import { createSupabaseServerClient } from "@/lib/supabase/server";
-import { tradeRowSchema, type TradeRow } from "@/lib/trades/schema";
+import { fetchUserTrades } from "@/lib/trades/queries";
 import { exposureSummary } from "@/lib/trades/exposure";
 
 export const runtime = "nodejs";
 
 export async function GET(req: Request) {
   try {
-    const user = await getUserOrThrow();
+    await getUserOrThrow();
     const rl = await enforceRateLimit(req, "read");
     if (!rl.ok) return rl.response;
 
-    const supabase = await createSupabaseServerClient();
-
     // We only need open trades, but fetching all + filtering client-side
-    // is simpler than a Supabase "closed_at is null" filter (which also
-    // needs to exclude trades closed without a pnl). 200 is plenty for a
+    // is simpler than a closed_at filter. 200 is plenty for a
     // single-user journal.
-    const { data, error } = await supabase
-      .from("trades")
-      .select("*")
-      .eq("user_id", user.id)
-      .order("created_at", { ascending: false })
-      .limit(200);
-
-    if (error) {
-      return NextResponse.json(
-        { error: `Failed to load trades: ${error.message}` },
-        { status: 500, headers: rl.headers },
-      );
-    }
-
-    const trades: TradeRow[] = (data ?? []).map((d) => tradeRowSchema.parse(d));
+    const trades = await fetchUserTrades({
+      orderBy: "createdAt",
+      order: "desc",
+      limit: 200,
+    });
     const summary = exposureSummary(trades);
 
     return NextResponse.json(summary, { headers: rl.headers });

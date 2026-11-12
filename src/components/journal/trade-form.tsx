@@ -51,7 +51,6 @@ import {
   pipValuePerLot,
   positionSize,
 } from "@/lib/risk";
-import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 
 type Props = {
   /** Existing trade to edit, or null for create. */
@@ -322,29 +321,18 @@ export function TradeForm({ initial, onSaved, onCancel }: Props) {
   ) => {
     setUploading(which);
     try {
-      const supabase = createSupabaseBrowserClient();
-      const { data: userData } = await supabase.auth.getUser();
-      const uid = userData.user?.id;
-      if (!uid) {
-        setFormError("You must be signed in to upload screenshots.");
+      const fd = new FormData();
+      fd.append("file", file);
+      fd.append("which", which);
+      const res = await fetch("/api/uploads", { method: "POST", body: fd });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.url) {
+        setFormError(data?.error ?? "Screenshot upload failed.");
         return;
       }
-      const ext = file.name.split(".").pop()?.toLowerCase() ?? "png";
-      const path = `${uid}/${Date.now()}-${which}.${ext}`;
-      const { error: upErr } = await supabase.storage
-        .from("trade-screenshots")
-        .upload(path, file, { upsert: false });
-      if (upErr) {
-        setFormError(`Screenshot upload failed: ${upErr.message}`);
-        return;
-      }
-      const { data: pub } = supabase.storage
-        .from("trade-screenshots")
-        .getPublicUrl(path);
-      const url = pub.publicUrl;
       setForm((f) => ({
         ...f,
-        [which === "before" ? "screenshot_url" : "screenshot_after_url"]: url,
+        [which === "before" ? "screenshot_url" : "screenshot_after_url"]: data.url as string,
       }));
     } catch (err) {
       setFormError(

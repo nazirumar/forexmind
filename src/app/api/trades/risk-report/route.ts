@@ -16,8 +16,9 @@
  */
 import { NextResponse } from "next/server";
 import { UnauthorizedError, getUserOrThrow, enforceRateLimit } from "@/lib/auth";
-import { createSupabaseServerClient } from "@/lib/supabase/server";
-import { tradeRowSchema, type TradeRow } from "@/lib/trades/schema";
+import { fetchUserTrades } from "@/lib/trades/queries";
+import { getGoals } from "@/lib/goals/queries";
+import { getProfile } from "@/lib/profile/queries";
 import {
   rStats,
   rDistribution,
@@ -29,53 +30,24 @@ export const runtime = "nodejs";
 
 export async function GET(req: Request) {
   try {
-    const user = await getUserOrThrow();
+    await getUserOrThrow();
     const rl = await enforceRateLimit(req, "read");
     if (!rl.ok) return rl.response;
 
-    const supabase = await createSupabaseServerClient();
-
-    // Fetch up to 200 closed+open trades (R analytics only use closed
-    // trades with risk_amount; loss limits use today's closed trades).
-    const { data, error } = await supabase
-      .from("trades")
-      .select("*")
-      .eq("user_id", user.id)
-      .order("closed_at", { ascending: false, nullsFirst: false })
-      .limit(200);
-
-    if (error) {
-      return NextResponse.json(
-        { error: `Failed to load trades: ${error.message}` },
-        { status: 500, headers: rl.headers },
-      );
-    }
-
-    const trades: TradeRow[] = (data ?? []).map((d) => tradeRowSchema.parse(d));
-
-    // Load the user's loss limits (trading_goals) + balance (profile).
-    const [goalsRes, profileRes] = await Promise.all([
-      supabase
-        .from("trading_goals")
-        .select("max_daily_loss_pct, max_trades_per_day")
-        .eq("user_id", user.id)
-        .maybeSingle(),
-      supabase
-        .from("profiles")
-        .select("default_balance")
-        .eq("user_id", user.id)
-        .maybeSingle(),
+    // Fetch up to 200 trades (closed+open), most recently closed first.
+    // R analytics only use closed trades with risk_amount; loss limits
+    // use today's closed trades. getGoals/getProfile return defaults
+    // (all-null) when the user hasn't saved any yet.
+    const [trades, goals, profile] = await Promise.all([
+      fetchUserTrades({ orderBy: "closedAt", order: "desc", limit: 200 }),
+      getGoals(),
+      getProfile(),
     ]);
 
-    const goals = goalsRes.data as
-      | { max_daily_loss_pct: number | null; max_trades_per_day: number | null }
-      | null;
-    const profile = profileRes.data as { default_balance: number | null } | null;
-
     const lossLimits = checkLossLimits(trades, {
-      maxDailyLossPct: goals?.max_daily_loss_pct ?? null,
-      maxTradesPerDay: goals?.max_trades_per_day ?? null,
-      balanceForPct: profile?.default_balance ?? null,
+      maxDailyLossPct: goals.max_daily_loss_pct ?? null,
+      maxTradesPerDay: goals.max_trades_per_day ?? null,
+      balanceForPct: profile.default_balance ?? null,
     });
 
     const body = {

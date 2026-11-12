@@ -1,32 +1,171 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
-// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
-
+// ForexMind Prisma schema — Neon Postgres.
+//
+// Replaces the Supabase SQL schema. Every table that previously lived
+// in Supabase's Postgres is modelled here, plus a `User` table that
+// backs the session-based auth (replacing Supabase Auth).
+//
+// Run `bunx prisma db push` after changing this to sync the Neon DB.
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
+// ---------------------------------------------------------------------------
+// Auth (replaces Supabase Auth)
+// ---------------------------------------------------------------------------
+
 model User {
-  id        String   @id @default(cuid())
-  email     String   @unique
-  name      String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id            String   @id @default(uuid())
+  email         String   @unique
+  passwordHash  String
+  displayName   String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  trades        Trade[]
+  analyses      AiAnalysis[]
+  profile       Profile?
+  goals         TradingGoal?
+  plans         TradePlan[]
+  watchlist     Watchlist[]
+  alerts        PriceAlert[]
 }
 
-model Post {
-  id        String   @id @default(cuid())
-  title     String
-  content   String?
-  published Boolean  @default(false)
-  authorId  String
+// ---------------------------------------------------------------------------
+// Trade journal
+// ---------------------------------------------------------------------------
+
+model Trade {
+  id            String    @id @default(uuid())
+  userId        String
+  pair          String
+  direction     String
+  entryPrice    Float
+  exitPrice     Float?
+  stopLoss      Float
+  takeProfit    Float?
+  lotSize       Float
+  openedAt      DateTime
+  closedAt      DateTime?
+  pnl           Float?
+  strategy      String?
+  session       String?
+  emotion       String?
+  followedPlan  Boolean   @default(true)
+  notes         String?
+  tags          String[] @default([])
+  createdAt     DateTime  @default(now())
+
+  // Risk-management fields (Feature 1)
+  accountBalance    Float?
+  riskPct           Float?
+  riskAmount        Float?
+  rMultiple         Float?
+  timeframe         String?
+  // Psychology + screenshots (Feature 2)
+  mistakeType       String?
+  screenshotUrl     String?
+  screenshotAfterUrl String?
+
+  user          User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  linkedPlans   TradePlan[]
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([userId, closedAt(sort: Desc)])
+}
+
+model AiAnalysis {
+  id           String   @id @default(uuid())
+  userId       String
+  type         String
+  inputSummary String?
+  output       String
+  createdAt    DateTime @default(now())
+
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, type, createdAt(sort: Desc)])
+}
+
+model Profile {
+  userId           String   @id
+  displayName      String?
+  defaultBalance   Float?
+  defaultRiskPct   Float?
+  preferredSession String?
+  defaultPair      String?
+  updatedAt        DateTime @updatedAt
+
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model TradePlan {
+  id            String   @id @default(uuid())
+  userId        String
+  pair          String
+  direction     String
+  entryPrice    Float
+  stopLoss      Float
+  takeProfit    Float?
+  accountBalance Float?
+  riskPct       Float?
+  lotSize       Float?
+  notes         String?
+  ruleResults   Json     @default("[]")
+  aiObservations Json?
+  verdict       String
+  status        String   @default("planned")
+  tradeId       String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  trade         Trade?   @relation(fields: [tradeId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([userId, status, createdAt(sort: Desc)])
+}
+
+model TradingGoal {
+  userId               String   @id
+  maxTradesPerDay      Int?
+  maxDailyLossPct      Float?
+  minRrTarget          Float?
+  maxConsecutiveLosses Int?
+  requireFollowedPlan  Boolean  @default(false)
+  updatedAt            DateTime @updatedAt
+
+  user                 User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Watchlist {
+  id        String   @id @default(uuid())
+  userId    String
+  pair      String
   createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, pair])
+  @@index([userId, createdAt(sort: Desc)])
+}
+
+model PriceAlert {
+  id          String    @id @default(uuid())
+  userId      String
+  pair        String
+  direction   String
+  threshold   Float
+  active      Boolean   @default(true)
+  triggeredAt DateTime?
+  createdAt   DateTime  @default(now())
+
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, active])
+  @@index([pair, active])
 }

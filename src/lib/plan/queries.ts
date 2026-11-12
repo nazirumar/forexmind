@@ -1,15 +1,21 @@
 /**
- * Server-only data-access for the Trade Plan Coach.
+ * Server-only data-access for the Trade Plan Coach (Neon Postgres via Prisma).
  *
  *  - savePlan(): write a plan + its rule results + AI observations.
  *  - listPlans(): get the user's recent plans (newest first).
  *  - getPlan(): get a single plan by id.
  *  - updatePlanStatus(): change a plan's status (and optionally link a trade).
  *
- * All require an authenticated session. RLS scopes every query to the
- * calling user.
+ * All require an authenticated session. There is no RLS anymore (that
+ * was a Supabase feature), so EVERY query explicitly filters by
+ * userId. This is the new isolation boundary - never drop it.
+ *
+ * The rest of the app consumes the snake_case PlanRow shape; Prisma
+ * generates camelCase fields + Date objects. `toPlanRow` maps between
+ * them so callers don't change.
  */
-import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { Prisma } from "@prisma/client";
+import { db } from "@/lib/db";
 import { getUserOrThrow } from "@/lib/auth";
 import type { ResolvedPlan } from "@/lib/plan/rules";
 import type {
@@ -19,10 +25,12 @@ import type {
 } from "@/lib/plan/schema";
 
 // ---------------------------------------------------------------------------
-// Row shapes from Supabase
+// Row shapes (snake_case, as consumed by the rest of the app)
 // ---------------------------------------------------------------------------
 
-/** Raw row as returned by Supabase from trade_plans. */
+/** Raw row shape returned by this module. Maps Prisma camelCase → snake_case
+ *  with ISO strings for the DateTime columns. rule_results + ai_observations
+ *  are Json columns in Prisma and pass through as-is. */
 export interface PlanRow {
   id: string;
   user_id: string;
@@ -44,6 +52,46 @@ export interface PlanRow {
   updated_at: string;
 }
 
+/**
+ * Inferred Prisma TradePlan type. Using `ReturnType<typeof ...>` avoids
+ * importing the model type from the (not-yet-re-exporting) db module,
+ * so this file only depends on `db` itself.
+ */
+type PrismaTradePlan = Awaited<
+  ReturnType<typeof db.tradePlan.findFirstOrThrow>
+>;
+
+/**
+ * Map a Prisma TradePlan (camelCase + Date objects) to the snake_case
+ * PlanRow shape the rest of the app expects (ISO strings for dates).
+ *
+ * Prisma stores `direction`, `verdict` and `status` as plain Strings (no
+ * DB enums), so we narrow them back to their union types here. The
+ * Json columns (ruleResults / aiObservations) pass through untouched.
+ */
+function toPlanRow(p: PrismaTradePlan): PlanRow {
+  return {
+    id: p.id,
+    user_id: p.userId,
+    pair: p.pair,
+    direction: p.direction as "buy" | "sell",
+    entry_price: p.entryPrice,
+    stop_loss: p.stopLoss,
+    take_profit: p.takeProfit,
+    account_balance: p.accountBalance,
+    risk_pct: p.riskPct,
+    lot_size: p.lotSize,
+    notes: p.notes,
+    rule_results: p.ruleResults,
+    ai_observations: (p.aiObservations as string[] | null) ?? null,
+    verdict: p.verdict as PlanVerdict,
+    status: p.status as "planned" | "taken" | "skipped" | "expired",
+    trade_id: p.tradeId,
+    created_at: p.createdAt.toISOString(),
+    updated_at: p.updatedAt.toISOString(),
+  };
+}
+
 // ---------------------------------------------------------------------------
 // savePlan
 // ---------------------------------------------------------------------------
@@ -60,39 +108,40 @@ export async function savePlan(args: {
   aiObservations: string[] | null;
 }): Promise<string | null> {
   const user = await getUserOrThrow();
-  const supabase = await createSupabaseServerClient();
-
-  const { data, error } = await supabase
-    .from("trade_plans")
-    .insert({
-      user_id: user.id,
-      pair: args.plan.pair,
-      direction: args.plan.direction,
-      entry_price: args.plan.entry_price,
-      stop_loss: args.plan.stop_loss,
-      take_profit: args.plan.take_profit,
-      account_balance: args.plan.account_balance,
-      risk_pct: args.plan.risk_pct,
-      lot_size: args.plan.lot_size,
-      notes: args.plan.notes,
-      rule_results: args.rules,
-      ai_observations: args.aiObservations,
-      verdict: args.verdict,
-      status: "planned",
-    })
-    .select("id")
-    .single();
-
-  if (error) {
+  try {
+    const created = await db.tradePlan.create({
+      data: {
+        userId: user.id,
+        pair: args.plan.pair,
+        direction: args.plan.direction,
+        entryPrice: args.plan.entry_price,
+        stopLoss: args.plan.stop_loss,
+        takeProfit: args.plan.take_profit,
+        accountBalance: args.plan.account_balance,
+        riskPct: args.plan.risk_pct,
+        lotSize: args.plan.lot_size,
+        notes: args.plan.notes,
+        ruleResults: args.rules,
+        // Prisma's nullable Json column rejects a plain `null`; use
+        // Prisma.DbNull to store SQL NULL (matches the old Supabase
+        // behaviour of writing NULL when there are no observations).
+        aiObservations:
+          args.aiObservations === null ? Prisma.DbNull : args.aiObservations,
+        verdict: args.verdict,
+        status: "planned",
+      },
+      select: { id: true },
+    });
+    return created.id;
+  } catch (err) {
     console.warn(
       "[plan] savePlan failed for user",
       user.id,
       ":",
-      error.message,
+      errMessage(err),
     );
     return null;
   }
-  return data?.id ?? null;
 }
 
 // ---------------------------------------------------------------------------
@@ -102,39 +151,83 @@ export async function savePlan(args: {
 /**
  * Get the user's N most recent plans. Returns [] on failure.
  *
- * We don't trust the JSON column types from Supabase — we coerce
- * rule_results + ai_observations defensively before parsing into
- * PlanListItem.
+ * We select only the columns the list needs and map Prisma camelCase →
+ * the snake_case shape parseListItem expects. rule_results is a Json
+ * column; we coerce it defensively before parsing into PlanListItem.
  */
 export async function listPlans(limit = 20): Promise<PlanListItem[]> {
   const user = await getUserOrThrow();
-  const supabase = await createSupabaseServerClient();
-
-  const { data, error } = await supabase
-    .from("trade_plans")
-    .select(
-      "id, pair, direction, entry_price, stop_loss, take_profit, " +
-        "verdict, status, trade_id, created_at, rule_results, notes",
-    )
-    .eq("user_id", user.id)
-    .order("created_at", { ascending: false })
-    .limit(Math.max(1, Math.min(100, limit)));
-
-  if (error || !data) {
+  try {
+    const rows = await db.tradePlan.findMany({
+      where: { userId: user.id },
+      orderBy: { createdAt: "desc" },
+      take: Math.max(1, Math.min(100, limit)),
+      select: {
+        id: true,
+        pair: true,
+        direction: true,
+        entryPrice: true,
+        stopLoss: true,
+        takeProfit: true,
+        verdict: true,
+        status: true,
+        tradeId: true,
+        createdAt: true,
+        ruleResults: true,
+        notes: true,
+      },
+    });
+    return rows
+      .map((r) =>
+        parseListItem({
+          id: r.id,
+          pair: r.pair,
+          direction: r.direction as "buy" | "sell",
+          entry_price: r.entryPrice,
+          stop_loss: r.stopLoss,
+          take_profit: r.takeProfit,
+          verdict: r.verdict as PlanVerdict,
+          status: r.status as "planned" | "taken" | "skipped" | "expired",
+          trade_id: r.tradeId,
+          created_at: r.createdAt.toISOString(),
+          rule_results: r.ruleResults,
+          notes: r.notes,
+        }),
+      )
+      .filter((p): p is PlanListItem => p !== null);
+  } catch (err) {
     console.warn(
       "[plan] listPlans failed for user",
       user.id,
       ":",
-      error?.message,
+      errMessage(err),
     );
     return [];
   }
-  return (data as unknown as PlanRow[])
-    .map(parseListItem)
-    .filter((p): p is PlanListItem => p !== null);
 }
 
-function parseListItem(row: PlanRow): PlanListItem | null {
+/**
+ * Structural input for parseListItem — the subset of PlanRow that the
+ * list view actually needs. PlanRow satisfies this structurally, so a
+ * full PlanRow can be passed too, but listPlans only selects + maps
+ * these fields.
+ */
+interface ListItemRow {
+  id: string;
+  pair: string;
+  direction: "buy" | "sell";
+  entry_price: number;
+  stop_loss: number;
+  take_profit: number | null;
+  verdict: PlanVerdict;
+  status: "planned" | "taken" | "skipped" | "expired";
+  trade_id: string | null;
+  created_at: string;
+  rule_results: RuleResult[] | unknown;
+  notes: string | null;
+}
+
+function parseListItem(row: ListItemRow): PlanListItem | null {
   try {
     const rules = Array.isArray(row.rule_results)
       ? (row.rule_results as RuleResult[])
@@ -176,24 +269,20 @@ function parseListItem(row: PlanRow): PlanListItem | null {
 
 /**
  * Get a single plan by id. Returns the full row, or null if not found
- * (RLS guarantees we only see the calling user's rows).
+ * (the userId filter guarantees isolation — a request for another
+ * user's plan returns null without leaking existence).
  */
 export async function getPlan(id: string): Promise<PlanRow | null> {
   const user = await getUserOrThrow();
-  const supabase = await createSupabaseServerClient();
-
-  const { data, error } = await supabase
-    .from("trade_plans")
-    .select("*")
-    .eq("id", id)
-    .eq("user_id", user.id)
-    .maybeSingle();
-
-  if (error || !data) {
-    console.warn("[plan] getPlan failed:", error?.message);
+  let plan: PrismaTradePlan | null;
+  try {
+    plan = await db.tradePlan.findFirst({ where: { id, userId: user.id } });
+  } catch (err) {
+    console.warn("[plan] getPlan failed:", errMessage(err));
     return null;
   }
-  return data as unknown as PlanRow;
+  if (!plan) return null;
+  return toPlanRow(plan);
 }
 
 // ---------------------------------------------------------------------------
@@ -217,25 +306,50 @@ export async function updatePlanStatus(
   update: PlanStatusUpdate,
 ): Promise<PlanRow | null> {
   const user = await getUserOrThrow();
-  const supabase = await createSupabaseServerClient();
 
-  const patch: Record<string, unknown> = {
-    updated_at: new Date().toISOString(),
-  };
-  if (update.status != null) patch.status = update.status;
-  if (update.trade_id !== undefined) patch.trade_id = update.trade_id;
-
-  const { data, error } = await supabase
-    .from("trade_plans")
-    .update(patch)
-    .eq("id", id)
-    .eq("user_id", user.id)
-    .select("*")
-    .maybeSingle();
-
-  if (error || !data) {
-    console.warn("[plan] updatePlanStatus failed:", error?.message);
+  // Ownership check first (no RLS anymore): a request for another
+  // user's plan returns null without leaking existence.
+  let existing: PrismaTradePlan | null;
+  try {
+    existing = await db.tradePlan.findFirst({
+      where: { id, userId: user.id },
+    });
+  } catch (err) {
+    console.warn("[plan] updatePlanStatus failed:", errMessage(err));
     return null;
   }
-  return data as unknown as PlanRow;
+  if (!existing) return null;
+
+  const data: Record<string, unknown> = {};
+  if (update.status != null) data.status = update.status;
+  if (update.trade_id !== undefined) data.tradeId = update.trade_id;
+
+  // Nothing to update (the route handler validates non-empty, but be
+  // safe): return the existing row as-is.
+  if (Object.keys(data).length === 0) {
+    return toPlanRow(existing);
+  }
+
+  try {
+    // `updatedAt` is `@updatedAt` in Prisma — auto-managed on update.
+    const updated = await db.tradePlan.update({ where: { id }, data });
+    return toPlanRow(updated);
+  } catch (err) {
+    // P2025 = record not found (e.g. deleted between findFirst & update).
+    if (
+      typeof err === "object" &&
+      err !== null &&
+      "code" in err &&
+      (err as { code: string }).code === "P2025"
+    ) {
+      return null;
+    }
+    console.warn("[plan] updatePlanStatus failed:", errMessage(err));
+    return null;
+  }
+}
+
+function errMessage(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  return String(err);
 }

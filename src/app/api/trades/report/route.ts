@@ -14,8 +14,7 @@
  */
 import { NextResponse } from "next/server";
 import { UnauthorizedError, getUserOrThrow, enforceRateLimit } from "@/lib/auth";
-import { createSupabaseServerClient } from "@/lib/supabase/server";
-import { tradeRowSchema, type TradeRow } from "@/lib/trades/schema";
+import { fetchUserTrades } from "@/lib/trades/queries";
 import { buildReportData } from "@/lib/report/data";
 import { renderReportPdf } from "@/lib/report/pdf";
 
@@ -44,24 +43,17 @@ export async function GET(req: Request) {
       );
     }
 
-    const user = await getUserOrThrow();
-    const supabase = await createSupabaseServerClient();
-    const { data, error } = await supabase
-      .from("trades")
-      .select("*")
-      .eq("user_id", user.id)
-      .gte("opened_at", from.toISOString())
-      .lte("opened_at", to.toISOString())
-      .order("opened_at", { ascending: true });
+    // Trades opened within [from, to], oldest first. fetchUserTrades
+    // authenticates the caller and maps rows to the snake_case TradeRow
+    // shape buildReportData expects.
+    const trades = await fetchUserTrades({
+      openedFrom: from,
+      openedTo: to,
+      orderBy: "openedAt",
+      order: "asc",
+      limit: 500,
+    });
 
-    if (error) {
-      return NextResponse.json(
-        { error: `Failed to load trades: ${error.message}` },
-        { status: 500, headers: rl.headers },
-      );
-    }
-
-    const trades: TradeRow[] = (data ?? []).map((d) => tradeRowSchema.parse(d));
     const reportData = buildReportData(
       trades,
       from.toISOString(),

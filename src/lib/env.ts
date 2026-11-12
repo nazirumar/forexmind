@@ -3,18 +3,22 @@
  *
  * IMPORTANT: This module MUST only be imported from server code
  * (Route Handlers, Server Components, server utilities). It reads
- * secrets (GROQ_API_KEY, SUPABASE_SERVICE_ROLE_KEY) that must never
- * reach the browser bundle. Next.js tree-shakes anything imported by
- * client files, but to be safe, do not import this from a file marked
- * "use client".
- *
- * Public env vars (NEXT_PUBLIC_*) are read directly from process.env
- * on the client; they are validated here only for the server-side
- * completeness of the schema.
+ * secrets (DATABASE_URL, AUTH_SECRET, GROQ_API_KEY) that must never
+ * reach the browser bundle.
  */
 import { z } from "zod";
 
 const envSchema = z.object({
+  // ---- Database (Neon Postgres via Prisma) ----
+  DATABASE_URL: z
+    .string()
+    .min(1, "DATABASE_URL is required (Neon Postgres connection string)."),
+
+  // ---- Auth (session cookie signing) ----
+  AUTH_SECRET: z
+    .string()
+    .min(16, "AUTH_SECRET must be a random string of at least 16 characters."),
+
   // ---- Groq (AI) ----
   GROQ_API_KEY: z
     .string()
@@ -27,22 +31,6 @@ const envSchema = z.object({
     .string()
     .min(1)
     .default("llama-3.1-8b-instant"),
-
-  // ---- Supabase ----
-  NEXT_PUBLIC_SUPABASE_URL: z
-    .string()
-    .url("NEXT_PUBLIC_SUPABASE_URL must be a valid URL"),
-  // Newer Supabase projects issue a "publishable key"; legacy projects
-  // use an "anon key". Either is accepted here.
-  NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: z
-    .string()
-    .min(1, "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY is required"),
-  // Legacy name - optional. config.ts falls back to this if the
-  // publishable key isn't set, so older .env files keep working.
-  NEXT_PUBLIC_SUPABASE_ANON_KEY: z.string().optional(),
-  SUPABASE_SERVICE_ROLE_KEY: z
-    .string()
-    .min(1, "SUPABASE_SERVICE_ROLE_KEY is required (server-only)"),
 
   // ---- Market data providers (optional in dev, required in prod) ----
   TWELVE_DATA_API_KEY: z.string().optional(),

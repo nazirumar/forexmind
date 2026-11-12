@@ -1,24 +1,25 @@
 /**
- * Server-only data access for the trade journal.
+ * Server-only data access for the trade journal (Neon Postgres via Prisma).
  *
- * Every function in this module:
+ * Every function:
  *  1. Authenticates the caller with getUserOrThrow() - so we always
  *     have a real user.id to scope queries by.
- *  2. Uses the server Supabase client (cookie-bound) - so RLS is
- *     enforced end-to-end. Even if a bug here sent a query without a
- *     user_id filter, Supabase would still refuse to return rows
- *     owned by another user.
+ *  2. Uses Prisma against the Neon DB. There is no RLS anymore (that
+ *     was a Supabase feature), so EVERY query explicitly filters by
+ *     userId. This is the new isolation boundary - never drop the
+ *     userId filter.
  *  3. Returns typed data (TradeRow / TradeStats / TradeListResponse)
  *     or throws a TradesError that the route handler maps to an HTTP
  *     status.
  *
- * This is the ONLY place in the codebase that touches the trades
- * table. Route handlers and Server Components import from here; they
- * never write raw Supabase queries themselves.
+ * The rest of the app consumes the snake_case TradeRow shape (from
+ * schema.ts); Prisma generates camelCase fields. `toTradeRow` maps
+ * between them so callers don't change.
  */
-import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { db } from "@/lib/db";
+import type { Trade as PrismaTrade } from "@prisma/client";
 import { getUserOrThrow } from "@/lib/auth";
-import type { User } from "@supabase/supabase-js";
+import type { SessionUser } from "@/lib/auth";
 import {
   computeStats,
   tradeRowSchema,
@@ -50,14 +51,77 @@ export class TradesError extends Error {
 /** Upper bound on the list endpoint. Past this we'd need real pagination. */
 const MAX_LIST_LIMIT = 200;
 
+/** Fetch the current user (auth happens exactly once per call). */
+async function context(): Promise<{ user: SessionUser }> {
+  const user = await getUserOrThrow();
+  return { user };
+}
+
 /**
- * Build a Supabase client + fetch the current user. Used by every
- * function below so the auth check happens exactly once per call.
+ * Map a Prisma Trade (camelCase + Date objects) to the snake_case
+ * TradeRow shape the rest of the app expects (ISO strings for dates).
  */
-async function context() {
-  const user: User = await getUserOrThrow();
-  const supabase = await createSupabaseServerClient();
-  return { user, supabase };
+export function toTradeRow(t: PrismaTrade): TradeRow {
+  return tradeRowSchema.parse({
+    id: t.id,
+    user_id: t.userId,
+    pair: t.pair,
+    direction: t.direction,
+    entry_price: t.entryPrice,
+    exit_price: t.exitPrice,
+    stop_loss: t.stopLoss,
+    take_profit: t.takeProfit,
+    lot_size: t.lotSize,
+    opened_at: t.openedAt.toISOString(),
+    closed_at: t.closedAt ? t.closedAt.toISOString() : null,
+    pnl: t.pnl,
+    strategy: t.strategy,
+    session: t.session,
+    emotion: t.emotion,
+    followed_plan: t.followedPlan,
+    notes: t.notes,
+    tags: t.tags,
+    created_at: t.createdAt.toISOString(),
+    account_balance: t.accountBalance,
+    risk_pct: t.riskPct,
+    risk_amount: t.riskAmount,
+    r_multiple: t.rMultiple,
+    timeframe: t.timeframe,
+    mistake_type: t.mistakeType,
+    screenshot_url: t.screenshotUrl,
+    screenshot_after_url: t.screenshotAfterUrl,
+  });
+}
+
+/** Build the Prisma data object for a new trade from TradeCreate input. */
+function createInputToData(input: TradeCreate, userId: string) {
+  return {
+    userId,
+    pair: input.pair,
+    direction: input.direction,
+    entryPrice: input.entry_price,
+    exitPrice: input.exit_price ?? null,
+    stopLoss: input.stop_loss,
+    takeProfit: input.take_profit ?? null,
+    lotSize: input.lot_size,
+    openedAt: new Date(input.opened_at),
+    closedAt: input.closed_at ? new Date(input.closed_at) : null,
+    pnl: input.pnl ?? null,
+    strategy: input.strategy ?? null,
+    session: input.session ?? null,
+    emotion: input.emotion ?? null,
+    followedPlan: input.followed_plan,
+    notes: input.notes ?? null,
+    tags: input.tags ?? [],
+    accountBalance: input.account_balance ?? null,
+    riskPct: input.risk_pct ?? null,
+    riskAmount: input.risk_amount ?? null,
+    timeframe: input.timeframe ?? null,
+    mistakeType: input.mistake_type ?? null,
+    screenshotUrl: input.screenshot_url ?? null,
+    screenshotAfterUrl: input.screenshot_after_url ?? null,
+    rMultiple: computeRMultiple(input.pnl ?? null, input.risk_amount ?? null),
+  };
 }
 
 /**
@@ -66,242 +130,96 @@ async function context() {
  * trades into someone else's journal.
  */
 export async function createTrade(input: TradeCreate): Promise<TradeRow> {
-  const { user, supabase } = await context();
-
-  const row = {
-    user_id: user.id,
-    pair: input.pair,
-    direction: input.direction,
-    entry_price: input.entry_price,
-    exit_price: input.exit_price ?? null,
-    stop_loss: input.stop_loss,
-    take_profit: input.take_profit ?? null,
-    lot_size: input.lot_size,
-    opened_at: input.opened_at,
-    closed_at: input.closed_at ?? null,
-    pnl: input.pnl ?? null,
-    strategy: input.strategy ?? null,
-    session: input.session ?? null,
-    emotion: input.emotion ?? null,
-    followed_plan: input.followed_plan,
-    notes: input.notes ?? null,
-    tags: input.tags ?? [],
-    // Risk-management fields (Feature 1).
-    account_balance: input.account_balance ?? null,
-    risk_pct: input.risk_pct ?? null,
-    risk_amount: input.risk_amount ?? null,
-    timeframe: input.timeframe ?? null,
-    // Psychology + screenshots (Feature 2).
-    mistake_type: input.mistake_type ?? null,
-    screenshot_url: input.screenshot_url ?? null,
-    screenshot_after_url: input.screenshot_after_url ?? null,
-    // Server-computed realized R (null until both pnl + risk_amount known).
-    r_multiple: computeRMultiple(input.pnl ?? null, input.risk_amount ?? null),
-  };
-
-  const { data, error } = await supabase
-    .from("trades")
-    .insert(row)
-    .select()
-    .single();
-
-  if (error) {
-    throw new TradesError(500, `Failed to create trade: ${error.message}`);
+  const { user } = await context();
+  try {
+    const created = await db.trade.create({ data: createInputToData(input, user.id) });
+    return toTradeRow(created);
+  } catch (err) {
+    throw new TradesError(500, `Failed to create trade: ${errMessage(err)}`);
   }
-  if (!data) {
-    throw new TradesError(500, "Trade insert returned no row.");
-  }
-
-  return tradeRowSchema.parse(data);
 }
 
 /**
- * Bulk insert multiple trades in a single Supabase call.
+ * Bulk insert multiple trades in a single Prisma call.
  *
- *  - All trades get the same user_id (from the session, never the
- *    request body).
- *  - Returns the inserted rows (with id + created_at).
- *  - On partial failure (some rows rejected by RLS or constraints),
- *    Supabase rolls back the whole batch - we throw a TradesError
- *    with the error message.
+ *  - All trades get the same userId (from the session, never the body).
+ *  - Returns the inserted rows.
+ *  - Prisma wraps a multi-row create in a transaction; on any row
+ *    failure the whole batch rolls back.
  *
  * Used by POST /api/trades/import for CSV import.
  */
-export async function bulkCreateTrades(
-  inputs: TradeCreate[],
-): Promise<TradeRow[]> {
-  const { user, supabase } = await context();
-
-  if (inputs.length === 0) {
-    return [];
+export async function bulkCreateTrades(inputs: TradeCreate[]): Promise<TradeRow[]> {
+  const { user } = await context();
+  if (inputs.length === 0) return [];
+  try {
+    const created = await db.trade.createManyAndReturn({
+      data: inputs.map((input) => createInputToData(input, user.id)),
+    });
+    return created.map(toTradeRow);
+  } catch (err) {
+    throw new TradesError(500, `Bulk insert failed: ${errMessage(err)}`);
   }
-
-  const rows = inputs.map((input) => ({
-    user_id: user.id,
-    pair: input.pair,
-    direction: input.direction,
-    entry_price: input.entry_price,
-    exit_price: input.exit_price ?? null,
-    stop_loss: input.stop_loss,
-    take_profit: input.take_profit ?? null,
-    lot_size: input.lot_size,
-    opened_at: input.opened_at,
-    closed_at: input.closed_at ?? null,
-    pnl: input.pnl ?? null,
-    strategy: input.strategy ?? null,
-    session: input.session ?? null,
-    emotion: input.emotion ?? null,
-    followed_plan: input.followed_plan,
-    notes: input.notes ?? null,
-    tags: input.tags ?? [],
-    account_balance: input.account_balance ?? null,
-    risk_pct: input.risk_pct ?? null,
-    risk_amount: input.risk_amount ?? null,
-    timeframe: input.timeframe ?? null,
-    mistake_type: input.mistake_type ?? null,
-    screenshot_url: input.screenshot_url ?? null,
-    screenshot_after_url: input.screenshot_after_url ?? null,
-    r_multiple: computeRMultiple(input.pnl ?? null, input.risk_amount ?? null),
-  }));
-
-  const { data, error } = await supabase
-    .from("trades")
-    .insert(rows)
-    .select();
-
-  if (error) {
-    throw new TradesError(500, `Bulk insert failed: ${error.message}`);
-  }
-  if (!data) {
-    throw new TradesError(500, "Bulk insert returned no rows.");
-  }
-
-  return (data as unknown[]).map((d) => tradeRowSchema.parse(d));
 }
 
 /**
  * List the user's trades, most-recent-created first.
  *
- *  - `limit` capped at MAX_LIST_LIMIT (200). Past that, we'd add cursor
- *    pagination (Phase X+).
- *  - `filter` (optional): structured filter on pair / direction / tag /
- *    session / strategy / outcome / followed_plan / opened_at range.
- *    Empty filter (the default) returns the unfiltered page, matching
- *    the pre-Phase-18 behavior.
- *  - Stats computed server-side so the client can render the
- *    dashboard-style header in a single round-trip.
+ *  - `limit` capped at MAX_LIST_LIMIT (200).
+ *  - `filter`: structured filter on pair / direction / tag / session /
+ *    strategy / outcome / followed_plan / opened_at range.
+ *  - Stats computed server-side so the client can render the header in
+ *    a single round-trip.
  *
- * The filter is applied at the database layer (Supabase query builder)
- * so a 200-trade user filtering by tag "fomc" only receives the
- * matching rows over the wire, not the whole table.
+ * The filter is applied at the database layer (Prisma where) so a
+ * 200-trade user filtering by tag "fomc" only receives matching rows.
  */
 export async function listTrades(
   limit = 100,
   filter: TradeFilter = EMPTY_FILTER,
 ): Promise<TradeListResponse> {
-  const { supabase } = await context();
+  const { user } = await context();
   const capped = Math.max(1, Math.min(MAX_LIST_LIMIT, Math.floor(limit)));
 
-  let q = supabase
-    .from("trades")
-    .select("*")
-    .order("created_at", { ascending: false })
-    .limit(capped);
+  const where = buildWhere(user.id, filter);
 
-  // Apply each filter dimension only when set, so an empty filter
-  // produces the exact same query as before Phase 18.
-  if (!isFilterEmpty(filter)) {
-    if (filter.pair !== null) q = q.eq("pair", filter.pair);
-    if (filter.direction !== "all") q = q.eq("direction", filter.direction);
-    if (filter.tag !== null) {
-      // Array-contains: Postgres `tags ? :tag` via Supabase's `.contains`
-      // (which maps to `@>`). Wrapped in an array because @> expects an
-      // array on the right side. GIN index `trades_tags_gin_idx` covers it.
-      q = q.contains("tags", [filter.tag]);
-    }
-    if (filter.session !== "all") q = q.eq("session", filter.session);
-    if (filter.strategy !== null) {
-      // Case-insensitive exact match. ilike with no wildcards = eq CI.
-      q = q.ilike("strategy", filter.strategy);
-    }
-    if (filter.followedPlan !== null) {
-      q = q.eq("followed_plan", filter.followedPlan);
-    }
-    if (filter.openedFrom !== null) q = q.gte("opened_at", filter.openedFrom);
-    if (filter.openedTo !== null) q = q.lte("opened_at", filter.openedTo);
-    switch (filter.outcome) {
-      case "win":
-        // Closed and pnl > 0.
-        q = q.not("pnl", "is", null).gt("pnl", 0);
-        break;
-      case "loss":
-        // Closed and pnl <= 0. (Breakeven counts as a loss here, matching
-        // the win-rate convention in computeStats.)
-        q = q.not("pnl", "is", null).lte("pnl", 0);
-        break;
-      case "open":
-        // Still running: no closed_at OR no realized pnl yet. We treat
-        // either condition as "open" since a trade could be closed at
-        // the broker but not yet logged with a PnL.
-        q = q.or("closed_at.is.null,pnl.is.null");
-        break;
-      case "breakeven":
-        q = q.eq("pnl", 0);
-        break;
-      case "all":
-      default:
-        break;
-    }
+  let trades: PrismaTrade[];
+  try {
+    trades = await db.trade.findMany({
+      where,
+      orderBy: { createdAt: "desc" },
+      take: capped,
+    });
+  } catch (err) {
+    throw new TradesError(500, `Failed to list trades: ${errMessage(err)}`);
   }
 
-  const { data, error } = await q;
-
-  if (error) {
-    throw new TradesError(500, `Failed to list trades: ${error.message}`);
-  }
-  if (!data) {
-    throw new TradesError(500, "Trade list returned no data.");
-  }
-
-  const trades = (data as unknown[]).map((d) => tradeRowSchema.parse(d));
-  const stats: TradeStats = computeStats(trades);
-
-  return {
-    trades,
-    stats,
-    hasMore: trades.length === capped, // hint, not authoritative
-  };
+  const rows = trades.map(toTradeRow);
+  const stats: TradeStats = computeStats(rows);
+  return { trades: rows, stats, hasMore: rows.length === capped };
 }
 
 /**
- * Return the distinct set of tags the user has ever used across their
- * trades, sorted alphabetically. Used to populate the tag filter
- * dropdown in the journal UI.
- *
- * Implementation note: we fetch only the `tags` column for all the
- * user's trades (capped at MAX_LIST_LIMIT) and union the arrays in JS.
- * A `select tags` keeps the payload tiny even for 200 trades. A future
- * optimization could push this into a SQL `unnest` + `distinct` via an
- * RPC, but for a single-user journal this is plenty fast.
+ * Return the distinct set of tags the user has ever used, sorted
+ * alphabetically. Fetches only the `tags` column for all the user's
+ * trades and unions the arrays in JS.
  */
 export async function listAllTags(): Promise<string[]> {
-  const { supabase } = await context();
-
-  const { data, error } = await supabase
-    .from("trades")
-    .select("tags")
-    .limit(MAX_LIST_LIMIT);
-
-  if (error) {
-    throw new TradesError(500, `Failed to list tags: ${error.message}`);
+  const { user } = await context();
+  let rows: { tags: string[] }[];
+  try {
+    rows = await db.trade.findMany({
+      where: { userId: user.id },
+      select: { tags: true },
+      take: MAX_LIST_LIMIT,
+    });
+  } catch (err) {
+    throw new TradesError(500, `Failed to list tags: ${errMessage(err)}`);
   }
-  if (!data) return [];
-
   const set = new Set<string>();
-  for (const row of data as unknown as Array<{ tags: string[] | null }>) {
-    const tags = row?.tags;
-    if (Array.isArray(tags)) {
-      for (const tag of tags) {
+  for (const row of rows) {
+    if (Array.isArray(row.tags)) {
+      for (const tag of row.tags) {
         if (typeof tag === "string" && tag !== "") set.add(tag);
       }
     }
@@ -310,87 +228,235 @@ export async function listAllTags(): Promise<string[]> {
 }
 
 /**
- * Fetch a single trade by id. RLS guarantees we can only ever see
- * rows owned by the current user, so we don't need an explicit
- * user_id filter; if a user passes another user's id, Supabase
- * returns no row and we translate that to a 404.
+ * Fetch a single trade by id. The userId filter guarantees isolation
+ * (no RLS anymore): a request for another user's trade returns null
+ * → 404, without leaking existence.
  */
 export async function getTrade(id: string): Promise<TradeRow> {
-  const { supabase } = await context();
-
-  const { data, error } = await supabase
-    .from("trades")
-    .select("*")
-    .eq("id", id)
-    .maybeSingle();
-
-  if (error) {
-    throw new TradesError(500, `Failed to fetch trade: ${error.message}`);
+  const { user } = await context();
+  let trade: PrismaTrade | null;
+  try {
+    trade = await db.trade.findFirst({ where: { id, userId: user.id } });
+  } catch (err) {
+    throw new TradesError(500, `Failed to fetch trade: ${errMessage(err)}`);
   }
-  if (!data) {
-    throw new TradesError(404, "Trade not found.");
-  }
-
-  return tradeRowSchema.parse(data);
+  if (!trade) throw new TradesError(404, "Trade not found.");
+  return toTradeRow(trade);
 }
 
 /**
- * Partial update. `undefined` fields are dropped before sending so
- * we don't overwrite columns the client didn't send. Null is sent
- * as null (clears the field).
+ * Partial update. `undefined` fields are dropped before sending so we
+ * don't overwrite columns the client didn't send. Null is sent as null
+ * (clears the field).
  */
-export async function updateTrade(
-  id: string,
-  input: TradeUpdate,
-): Promise<TradeRow> {
-  const { supabase } = await context();
-
-  // Strip undefined so the patch only touches provided fields.
-  // We keep null (the user is clearing the field).
-  const patch: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(input)) {
-    if (v !== undefined) patch[k] = v;
-  }
-
-  if (Object.keys(patch).length === 0) {
+export async function updateTrade(id: string, input: TradeUpdate): Promise<TradeRow> {
+  const { user } = await context();
+  const data = updateInputToData(input);
+  if (Object.keys(data).length === 0) {
     throw new TradesError(400, "No fields to update.");
   }
-
-  const { data, error } = await supabase
-    .from("trades")
-    .update(patch)
-    .eq("id", id)
-    .select()
-    .maybeSingle();
-
-  if (error) {
-    throw new TradesError(500, `Failed to update trade: ${error.message}`);
+  // Recompute r_multiple if pnl or risk_amount changed.
+  if ("pnl" in data || "riskAmount" in data) {
+    let trade: PrismaTrade | null = null;
+    try {
+      trade = await db.trade.findFirst({ where: { id, userId: user.id } });
+    } catch {
+      /* fall through to the update attempt */
+    }
+    if (trade) {
+      const pnl = "pnl" in data ? (data.pnl as number | null) : trade.pnl;
+      const risk = "riskAmount" in data ? (data.riskAmount as number | null) : trade.riskAmount;
+      data.rMultiple = computeRMultiple(pnl, risk);
+    }
   }
-  if (!data) {
-    throw new TradesError(404, "Trade not found.");
+  try {
+    const updated = await db.trade.update({
+      where: { id },
+      data,
+    });
+    // Guard against updating another user's trade: Prisma update by id
+    // doesn't filter by userId, so verify ownership after the fact.
+    if (updated.userId !== user.id) {
+      throw new TradesError(404, "Trade not found.");
+    }
+    return toTradeRow(updated);
+  } catch (err) {
+    if (err instanceof TradesError) throw err;
+    // P2025 = record not found.
+    if (typeof err === "object" && err !== null && "code" in err && (err as { code: string }).code === "P2025") {
+      throw new TradesError(404, "Trade not found.");
+    }
+    throw new TradesError(500, `Failed to update trade: ${errMessage(err)}`);
   }
-
-  return tradeRowSchema.parse(data);
 }
 
 /**
- * Delete a trade. Returns 204-style success. If the trade doesn't
- * exist or belongs to another user (RLS hides it), we return 404
- * rather than leaking existence.
+ * Delete a trade. Returns nothing on success. If the trade doesn't
+ * exist or belongs to another user, we return 404 rather than leaking
+ * existence.
  */
 export async function deleteTrade(id: string): Promise<void> {
-  const { supabase } = await context();
-
-  const { data, error } = await supabase
-    .from("trades")
-    .delete({ count: "exact" })
-    .eq("id", id)
-    .select();
-
-  if (error) {
-    throw new TradesError(500, `Failed to delete trade: ${error.message}`);
+  const { user } = await context();
+  let count: number;
+  try {
+    const res = await db.trade.deleteMany({ where: { id, userId: user.id } });
+    count = res.count;
+  } catch (err) {
+    throw new TradesError(500, `Failed to delete trade: ${errMessage(err)}`);
   }
-  if (!data || data.length === 0) {
-    throw new TradesError(404, "Trade not found.");
+  if (count === 0) throw new TradesError(404, "Trade not found.");
+}
+
+// ---------------------------------------------------------------------------
+// Raw fetch helper (used by report / risk-report / exposure / journal-digest
+// routes and the dashboard-stats + risk server components, which all need the
+// user's trades as TradeRow[] without the stats envelope listTrades returns).
+// ---------------------------------------------------------------------------
+
+export type FetchTradesOpts = {
+  limit?: number;
+  orderBy?: "createdAt" | "closedAt" | "openedAt";
+  order?: "asc" | "desc";
+  /** Inclusive bounds on opened_at. */
+  openedFrom?: Date;
+  openedTo?: Date;
+  /** Only trades with a closed_at (realized). */
+  closedOnly?: boolean;
+  /** Nulls-first ordering (for closedAt asc with open trades on top). */
+  nullsFirst?: boolean;
+};
+
+/**
+ * Fetch the current user's trades as TradeRow[], with light ordering +
+ * date-range options. Every consumer that previously did a raw
+ * `supabase.from('trades').select('*').eq('user_id', ...)` should call
+ * this instead so the Prisma query + snake_case mapping live in one place.
+ */
+export async function fetchUserTrades(opts: FetchTradesOpts = {}): Promise<TradeRow[]> {
+  const { user } = await context();
+  const {
+    limit = 200,
+    orderBy = "createdAt",
+    order = "desc",
+    openedFrom,
+    openedTo,
+    closedOnly = false,
+    nullsFirst = false,
+  } = opts;
+
+  const where: Record<string, unknown> = { userId: user.id };
+  const openedAt: Record<string, unknown> = {};
+  if (openedFrom) openedAt.gte = openedFrom;
+  if (openedTo) openedAt.lte = openedTo;
+  if (Object.keys(openedAt).length > 0) where.openedAt = openedAt;
+  if (closedOnly) where.closedAt = { not: null };
+
+  // Prisma sorts nulls last by default for asc. To put open trades
+  // (null closedAt) first on an asc sort, split into two ordered queries
+  // is overkill; instead use the raw orderBy nulls option via `nullsFirst`.
+  const orderByClause: Record<string, unknown> = {};
+  if (nullsFirst && orderBy === "closedAt") {
+    orderByClause[orderBy] = { sort: order, nulls: "first" };
+  } else {
+    orderByClause[orderBy] = order;
   }
+
+  try {
+    const trades = await db.trade.findMany({
+      where,
+      orderBy: orderByClause,
+      take: limit,
+    });
+    return trades.map(toTradeRow);
+  } catch (err) {
+    throw new TradesError(500, `Failed to fetch trades: ${errMessage(err)}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Filter → Prisma where
+// ---------------------------------------------------------------------------
+
+function buildWhere(userId: string, filter: TradeFilter) {
+  const where: Record<string, unknown> = { userId };
+
+  if (isFilterEmpty(filter)) return where;
+
+  if (filter.pair) where.pair = filter.pair;
+  if (filter.direction !== "all") where.direction = filter.direction;
+  if (filter.tag) where.tags = { has: filter.tag };
+  if (filter.session !== "all") where.session = filter.session;
+  if (filter.strategy) {
+    where.strategy = { equals: filter.strategy, mode: "insensitive" };
+  }
+  if (filter.followedPlan !== null) where.followedPlan = filter.followedPlan;
+
+  const openedAt: Record<string, unknown> = {};
+  if (filter.openedFrom) openedAt.gte = new Date(filter.openedFrom);
+  if (filter.openedTo) openedAt.lte = new Date(filter.openedTo);
+  if (Object.keys(openedAt).length > 0) where.openedAt = openedAt;
+
+  switch (filter.outcome) {
+    case "win":
+      where.pnl = { not: null, gt: 0 };
+      break;
+    case "loss":
+      where.pnl = { not: null, lte: 0 };
+      break;
+    case "open":
+      where.OR = [{ closedAt: null }, { pnl: null }];
+      break;
+    case "breakeven":
+      where.pnl = 0;
+      break;
+    case "all":
+    default:
+      break;
+  }
+  return where;
+}
+
+/** Map a snake_case TradeUpdate patch to Prisma camelCase data. */
+function updateInputToData(input: TradeUpdate): Record<string, unknown> {
+  const data: Record<string, unknown> = {};
+  const map: Record<string, string> = {
+    pair: "pair",
+    direction: "direction",
+    entry_price: "entryPrice",
+    exit_price: "exitPrice",
+    stop_loss: "stopLoss",
+    take_profit: "takeProfit",
+    lot_size: "lotSize",
+    opened_at: "openedAt",
+    closed_at: "closedAt",
+    pnl: "pnl",
+    strategy: "strategy",
+    session: "session",
+    emotion: "emotion",
+    followed_plan: "followedPlan",
+    notes: "notes",
+    tags: "tags",
+    account_balance: "accountBalance",
+    risk_pct: "riskPct",
+    risk_amount: "riskAmount",
+    timeframe: "timeframe",
+    mistake_type: "mistakeType",
+    screenshot_url: "screenshotUrl",
+    screenshot_after_url: "screenshotAfterUrl",
+  };
+  for (const [k, v] of Object.entries(input)) {
+    if (v === undefined) continue;
+    const prismaKey = map[k] ?? k;
+    let value: unknown = v;
+    if (k === "opened_at" || k === "closed_at") {
+      value = v ? new Date(v as string) : null;
+    }
+    data[prismaKey] = value;
+  }
+  return data;
+}
+
+function errMessage(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  return String(err);
 }

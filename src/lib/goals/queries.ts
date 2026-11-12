@@ -1,14 +1,22 @@
 /**
- * Server-only data access for trading goals.
+ * Server-only data access for trading goals (Neon Postgres via Prisma).
  *
  *  - getGoals(): read the user's goals row (or DEFAULT_GOALS).
  *  - upsertGoals(): insert or update the single row.
  *
- * RLS scopes every query to the calling user.
+ * No RLS anymore (that was Supabase). The user is a SessionUser
+ * ({ id, email, displayName? }) from the signed session cookie, and
+ * EVERY query explicitly filters by userId. This is the new isolation
+ * boundary - never drop the userId filter.
+ *
+ * The rest of the app consumes the snake_case GoalsRow shape (from
+ * schema.ts); Prisma generates camelCase fields. `toGoalsRow` maps
+ * between them so callers don't change.
  */
-import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { db } from "@/lib/db";
 import { getUserOrThrow } from "@/lib/auth";
-import { DEFAULT_GOALS, goalsRowSchema, type GoalsUpdate } from "@/lib/goals/schema";
+import type { TradingGoal as PrismaTradingGoal } from "@prisma/client";
+import { DEFAULT_GOALS, goalsRowSchema, type GoalsRow, type GoalsUpdate } from "@/lib/goals/schema";
 
 export class GoalsError extends Error {
   readonly status: number;
@@ -19,53 +27,73 @@ export class GoalsError extends Error {
   }
 }
 
+/** Fetch the current user (auth happens exactly once per call). */
 async function context() {
   const user = await getUserOrThrow();
-  const supabase = await createSupabaseServerClient();
-  return { user, supabase };
+  return { user };
+}
+
+/**
+ * Map a Prisma TradingGoal (camelCase + Date) to the snake_case GoalsRow
+ * shape the rest of the app expects (ISO string for updated_at).
+ */
+function toGoalsRow(g: PrismaTradingGoal): GoalsRow {
+  return goalsRowSchema.parse({
+    user_id: g.userId,
+    max_trades_per_day: g.maxTradesPerDay,
+    max_daily_loss_pct: g.maxDailyLossPct,
+    min_rr_target: g.minRrTarget,
+    max_consecutive_losses: g.maxConsecutiveLosses,
+    require_followed_plan: g.requireFollowedPlan,
+    updated_at: g.updatedAt.toISOString(),
+  });
 }
 
 /** Read the user's goals row. Returns DEFAULT_GOALS if none exists yet. */
-export async function getGoals() {
-  const { user, supabase } = await context();
-  const { data, error } = await supabase
-    .from("trading_goals")
-    .select("*")
-    .eq("user_id", user.id)
-    .maybeSingle();
-
-  if (error) {
-    throw new GoalsError(500, `Failed to load goals: ${error.message}`);
+export async function getGoals(): Promise<GoalsRow> {
+  const { user } = await context();
+  let row: PrismaTradingGoal | null;
+  try {
+    row = await db.tradingGoal.findUnique({ where: { userId: user.id } });
+  } catch (err) {
+    throw new GoalsError(500, `Failed to load goals: ${errMessage(err)}`);
   }
-  if (!data) return { ...DEFAULT_GOALS, user_id: user.id };
-  return goalsRowSchema.parse(data);
+  if (!row) return { ...DEFAULT_GOALS, user_id: user.id };
+  return toGoalsRow(row);
 }
 
-/** Insert or update the user's goals row. */
-export async function upsertGoals(input: GoalsUpdate) {
-  const { user, supabase } = await context();
+/**
+ * Insert or update the user's goals row.
+ *
+ * Mirrors the original Supabase behaviour: every field is written on
+ * every save, with unset fields cleared to null (or false for
+ * require_followed_plan). userId is taken from the authenticated
+ * session (NEVER from the request body).
+ */
+export async function upsertGoals(input: GoalsUpdate): Promise<GoalsRow> {
+  const { user } = await context();
 
-  const row = {
-    user_id: user.id,
-    max_trades_per_day: input.max_trades_per_day ?? null,
-    max_daily_loss_pct: input.max_daily_loss_pct ?? null,
-    min_rr_target: input.min_rr_target ?? null,
-    max_consecutive_losses: input.max_consecutive_losses ?? null,
-    require_followed_plan: input.require_followed_plan ?? false,
-    updated_at: new Date().toISOString(),
+  const data = {
+    maxTradesPerDay: input.max_trades_per_day ?? null,
+    maxDailyLossPct: input.max_daily_loss_pct ?? null,
+    minRrTarget: input.min_rr_target ?? null,
+    maxConsecutiveLosses: input.max_consecutive_losses ?? null,
+    requireFollowedPlan: input.require_followed_plan ?? false,
   };
 
-  const { data, error } = await supabase
-    .from("trading_goals")
-    .upsert(row, { onConflict: "user_id" })
-    .select()
-    .single();
+  try {
+    const row = await db.tradingGoal.upsert({
+      where: { userId: user.id },
+      create: { userId: user.id, ...data },
+      update: data,
+    });
+    return toGoalsRow(row);
+  } catch (err) {
+    throw new GoalsError(500, `Failed to save goals: ${errMessage(err)}`);
+  }
+}
 
-  if (error) {
-    throw new GoalsError(500, `Failed to save goals: ${error.message}`);
-  }
-  if (!data) {
-    throw new GoalsError(500, "Goals upsert returned no row.");
-  }
-  return goalsRowSchema.parse(data);
+function errMessage(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  return String(err);
 }

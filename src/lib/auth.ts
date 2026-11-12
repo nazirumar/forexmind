@@ -23,8 +23,9 @@
  *     }
  *   }
  */
-import { createSupabaseServerClient } from "@/lib/supabase/server";
-import type { User } from "@supabase/supabase-js";
+import { getSessionUser, type SessionUser } from "@/lib/auth/session";
+
+export type { SessionUser };
 
 export class UnauthorizedError extends Error {
   readonly status = 401;
@@ -37,30 +38,23 @@ export class UnauthorizedError extends Error {
 
 /**
  * Returns the authenticated user, or throws UnauthorizedError (401).
- * Trustworthy: it validates the JWT server-side via Supabase
- * (supabase.auth.getUser), not just reads the cookie payload.
+ * Reads the HMAC-signed session cookie and verifies its signature
+ * server-side (no external auth service call).
  */
-export async function getUserOrThrow(): Promise<User> {
-  const supabase = await createSupabaseServerClient();
-  const { data, error } = await supabase.auth.getUser();
-
-  if (error || !data.user) {
+export async function getUserOrThrow(): Promise<SessionUser> {
+  const user = await getSessionUser();
+  if (!user) {
     throw new UnauthorizedError();
   }
-
-  return data.user;
+  return user;
 }
 
 /**
  * Convenience wrapper that returns `null` instead of throwing.
  * Useful when auth is optional (e.g. rendering a header).
  */
-export async function getUserOrNull(): Promise<User | null> {
-  try {
-    return await getUserOrThrow();
-  } catch {
-    return null;
-  }
+export async function getUserOrNull(): Promise<SessionUser | null> {
+  return getSessionUser();
 }
 
 // ---------------------------------------------------------------------------
