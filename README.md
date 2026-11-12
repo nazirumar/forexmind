@@ -62,7 +62,7 @@ GROQ_MODEL_FAST=llama-3.1-8b-instant
 
 # Supabase - Project Settings -> API
 NEXT_PUBLIC_SUPABASE_URL=
-NEXT_PUBLIC_SUPABASE_ANON_KEY=
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=    # "publishable" key (newer projects) or legacy "anon" key
 SUPABASE_SERVICE_ROLE_KEY=           # server-only, never exposed to browser
 
 # Market data (optional in dev, used by /api/news)

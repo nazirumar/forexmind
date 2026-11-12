@@ -21,12 +21,17 @@ import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
-const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "";
+// Publishable key (newer Supabase projects) with fallback to the
+// legacy anon key name so both setups work.
+const SUPABASE_PUBLISHABLE_KEY =
+  process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ??
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ??
+  "";
 
 function isSupabaseConfigured(): boolean {
-  return Boolean(SUPABASE_URL && SUPABASE_ANON_KEY) &&
+  return Boolean(SUPABASE_URL && SUPABASE_PUBLISHABLE_KEY) &&
     !SUPABASE_URL.includes("placeholder") &&
-    !SUPABASE_ANON_KEY.includes("placeholder");
+    !SUPABASE_PUBLISHABLE_KEY.includes("placeholder");
 }
 
 /** Pages reachable without a session. */
@@ -40,7 +45,7 @@ export async function middleware(request: NextRequest) {
 
   let supabaseResponse = NextResponse.next({ request });
 
-  const supabase = createServerClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+  const supabase = createServerClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
     cookies: {
       getAll() {
         return request.cookies.getAll();

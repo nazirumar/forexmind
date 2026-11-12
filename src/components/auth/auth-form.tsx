@@ -81,7 +81,7 @@ export function AuthForm({ mode }: { mode: "login" | "signup" }) {
     e.preventDefault();
     if (!configured) {
       setFormError(
-        "Supabase is not configured in this environment. Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY in .env.local.",
+        "Supabase is not configured in this environment. Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY in .env.local.",
       );
       return;
     }

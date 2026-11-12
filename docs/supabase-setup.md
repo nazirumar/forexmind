@@ -8,7 +8,7 @@ The code in `src/` already references these env vars:
 
 ```
 NEXT_PUBLIC_SUPABASE_URL
-NEXT_PUBLIC_SUPABASE_ANON_KEY
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY   # newer projects; legacy name NEXT_PUBLIC_SUPABASE_ANON_KEY also works
 SUPABASE_SERVICE_ROLE_KEY   # server-only, never shipped to the browser
 ```
 
@@ -40,7 +40,7 @@ bottom-left) → **API**. You'll see three values. Paste them into
 ```bash
 # .env.local
 NEXT_PUBLIC_SUPABASE_URL=https://YOUR-PROJECT.supabase.co
-NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJhbGciOi...           # "anon public" key
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_...    # "publishable" key (or legacy "anon" key)
 SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOi...               # "service_role" key (KEEP SECRET)
 ```
 

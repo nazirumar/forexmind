@@ -13,13 +13,13 @@
  */
 import { createBrowserClient } from "@supabase/ssr";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { SUPABASE_URL, SUPABASE_ANON_KEY } from "@/lib/supabase/config";
+import { SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY } from "@/lib/supabase/config";
 
 let cached: SupabaseClient | undefined;
 
 export function createSupabaseBrowserClient(): SupabaseClient {
   if (!cached) {
-    cached = createBrowserClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    cached = createBrowserClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
   }
   return cached;
 }

@@ -32,9 +32,14 @@ const envSchema = z.object({
   NEXT_PUBLIC_SUPABASE_URL: z
     .string()
     .url("NEXT_PUBLIC_SUPABASE_URL must be a valid URL"),
-  NEXT_PUBLIC_SUPABASE_ANON_KEY: z
+  // Newer Supabase projects issue a "publishable key"; legacy projects
+  // use an "anon key". Either is accepted here.
+  NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: z
     .string()
-    .min(1, "NEXT_PUBLIC_SUPABASE_ANON_KEY is required"),
+    .min(1, "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY is required"),
+  // Legacy name - optional. config.ts falls back to this if the
+  // publishable key isn't set, so older .env files keep working.
+  NEXT_PUBLIC_SUPABASE_ANON_KEY: z.string().optional(),
   SUPABASE_SERVICE_ROLE_KEY: z
     .string()
     .min(1, "SUPABASE_SERVICE_ROLE_KEY is required (server-only)"),
