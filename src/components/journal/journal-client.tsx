@@ -64,6 +64,7 @@ import { TradeForm } from "@/components/journal/trade-form";
 import { StatsPanel } from "@/components/journal/stats-panel";
 import { AnalyticsPanel } from "@/components/journal/analytics-panel";
 import { JournalReviewPanel } from "@/components/journal/journal-review-panel";
+import { WeeklyDigestPanel } from "@/components/journal/weekly-digest-panel";
 import { ImportExportPanel } from "@/components/journal/import-export-panel";
 import {
   computeStats,
@@ -273,10 +274,11 @@ export function JournalClient() {
         </div>
       )}
 
-      {/* AI Journal Review - only show when user has any trades */}
+      {/* AI Journal Review + Weekly Digest - only show when user has any trades */}
       {!authRequired && loaded && trades.length > 0 && (
-        <div className="mt-6">
+        <div className="mt-6 grid gap-6 lg:grid-cols-2">
           <JournalReviewPanel closedCount={filteredStats?.closed ?? 0} />
+          <WeeklyDigestPanel />
         </div>
       )}
 

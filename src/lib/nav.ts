@@ -11,6 +11,10 @@ import {
   Newspaper,
   ShieldCheck,
   ClipboardList,
+  CalendarClock,
+  Target,
+  GitCompareArrows,
+  Eye,
   Settings,
   type LucideIcon,
 } from "lucide-react";
@@ -54,6 +58,12 @@ export const NAV_ITEMS: NavItem[] = [
     description: "Headlines + AI market brief",
   },
   {
+    label: "Calendar",
+    href: "/calendar",
+    icon: CalendarClock,
+    description: "Economic events + no-trade windows",
+  },
+  {
     label: "Plan Coach",
     href: "/plan",
     icon: ClipboardList,
@@ -64,6 +74,24 @@ export const NAV_ITEMS: NavItem[] = [
     href: "/checker",
     icon: ShieldCheck,
     description: "Validate an idea vs your rules",
+  },
+  {
+    label: "Goals",
+    href: "/goals",
+    icon: Target,
+    description: "Discipline rules + violation report",
+  },
+  {
+    label: "Replay",
+    href: "/replay",
+    icon: GitCompareArrows,
+    description: "What-if simulator for past trades",
+  },
+  {
+    label: "Watchlist",
+    href: "/watchlist",
+    icon: Eye,
+    description: "Watched pairs + price alerts",
   },
   {
     label: "Settings",

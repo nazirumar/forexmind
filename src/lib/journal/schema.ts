@@ -158,3 +158,45 @@ export function patternTypeMeta(t: PatternType): {
       return { label: "Observation", color: "slate", icon: "info" };
   }
 }
+
+// ---------------------------------------------------------------------------
+// Weekly Digest (Phase 23)
+// ---------------------------------------------------------------------------
+
+export const digestRequestSchema = z.object({
+  /** ISO date, inclusive lower bound. Defaults to 7 days ago. */
+  from: z
+    .string()
+    .refine((s) => !Number.isNaN(Date.parse(s)), "Invalid date.")
+    .optional(),
+  /** ISO date, inclusive upper bound. Defaults to now. */
+  to: z
+    .string()
+    .refine((s) => !Number.isNaN(Date.parse(s)), "Invalid date.")
+    .optional(),
+});
+
+export type DigestRequest = z.infer<typeof digestRequestSchema>;
+
+export const digestResponseSchema = z.object({
+  id: z.string().uuid().nullable(),
+  window_start: z.string(),
+  window_end: z.string(),
+  analyzed_count: z.number().int(),
+  has_enough_data: z.boolean(),
+  /** Short paragraph summary the AI produced. */
+  summary: z.string(),
+  /** 1-3 short insight strings. */
+  insights: z.array(z.string().max(400)),
+  /** One reflection question for the user. */
+  question: z.string(),
+  /** The deterministic patterns detected (echoed back for transparency). */
+  patterns: z.array(
+    z.object({
+      key: z.string(),
+      statement: z.string(),
+    }),
+  ),
+});
+
+export type DigestResponse = z.infer<typeof digestResponseSchema>;

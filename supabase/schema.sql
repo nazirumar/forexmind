@@ -268,3 +268,116 @@ create index if not exists trades_tags_gin_idx
 -- handles the order-by-created_at within a user.
 create index if not exists trades_user_tag_created_idx
   on public.trades (user_id, created_at desc) where array_length(tags, 1) is not null;
+
+-- ============================================================
+-- Phase 20: trading_goals
+-- ============================================================
+-- One row per user (upsert on first save). Stores the user's
+-- self-imposed discipline rules. The pure rules engine in
+-- src/lib/goals/rules.ts evaluates recent trades against these
+-- goals and returns a list of violations (with dates), which the
+-- /goals page surfaces as a "discipline report".
+--
+-- All fields are nullable so a user can enable only the rules they
+-- care about. NULL means "this rule is not enforced".
+-- ============================================================
+
+create table if not exists public.trading_goals (
+  user_id              uuid primary key references auth.users (id) on delete cascade,
+  max_trades_per_day   integer check (max_trades_per_day between 1 and 50),
+  max_daily_loss_pct   numeric check (max_daily_loss_pct between 0 and 100),
+  min_rr_target        numeric check (min_rr_target between 0 and 100),
+  max_consecutive_losses integer check (max_consecutive_losses between 1 and 20),
+  require_followed_plan boolean not null default false,
+  updated_at           timestamptz not null default now()
+);
+
+comment on table public.trading_goals is
+  'Per-user trading discipline goals. At most one row per user. NULL fields mean "rule not enforced".';
+
+drop policy if exists "goals_select_own" on public.trading_goals;
+create policy "goals_select_own"
+  on public.trading_goals for select
+  using (auth.uid () = user_id);
+
+drop policy if exists "goals_upsert_own" on public.trading_goals;
+create policy "goals_upsert_own"
+  on public.trading_goals for insert
+  with check (auth.uid () = user_id);
+
+drop policy if exists "goals_update_own" on public.trading_goals;
+create policy "goals_update_own"
+  on public.trading_goals for update
+  using (auth.uid () = user_id)
+  with check (auth.uid () = user_id);
+
+drop policy if exists "goals_delete_own" on public.trading_goals;
+create policy "goals_delete_own"
+  on public.trading_goals for delete
+  using (auth.uid () = user_id);
+
+-- ============================================================
+-- Phase 22: watchlist + price_alerts
+-- ============================================================
+
+create table if not exists public.watchlist (
+  id         uuid primary key default gen_random_uuid(),
+  user_id    uuid not null references auth.users (id) on delete cascade,
+  pair       text not null,
+  created_at timestamptz not null default now(),
+  unique (user_id, pair)
+);
+
+comment on table public.watchlist is
+  'Per-user watched pairs. One row per (user, pair). Drives the /watchlist page.';
+
+create index if not exists watchlist_user_idx
+  on public.watchlist (user_id, created_at desc);
+
+create table if not exists public.price_alerts (
+  id           uuid primary key default gen_random_uuid(),
+  user_id      uuid not null references auth.users (id) on delete cascade,
+  pair         text not null,
+  -- "above": trigger when rate >= threshold
+  -- "below": trigger when rate <= threshold
+  direction    text not null check (direction in ('above', 'below')),
+  threshold    numeric not null check (threshold > 0),
+  active       boolean not null default true,
+  triggered_at timestamptz,
+  created_at   timestamptz not null default now()
+);
+
+comment on table public.price_alerts is
+  'Per-user price alerts. direction "above" fires when rate >= threshold; "below" fires when rate <= threshold.';
+
+create index if not exists price_alerts_user_active_idx
+  on public.price_alerts (user_id, active);
+
+create index if not exists price_alerts_pair_active_idx
+  on public.price_alerts (pair, active);
+
+-- RLS for watchlist
+drop policy if exists "watchlist_select_own" on public.watchlist;
+create policy "watchlist_select_own"
+  on public.watchlist for select using (auth.uid () = user_id);
+drop policy if exists "watchlist_insert_own" on public.watchlist;
+create policy "watchlist_insert_own"
+  on public.watchlist for insert with check (auth.uid () = user_id);
+drop policy if exists "watchlist_delete_own" on public.watchlist;
+create policy "watchlist_delete_own"
+  on public.watchlist for delete using (auth.uid () = user_id);
+
+-- RLS for price_alerts
+drop policy if exists "alerts_select_own" on public.price_alerts;
+create policy "alerts_select_own"
+  on public.price_alerts for select using (auth.uid () = user_id);
+drop policy if exists "alerts_insert_own" on public.price_alerts;
+create policy "alerts_insert_own"
+  on public.price_alerts for insert with check (auth.uid () = user_id);
+drop policy if exists "alerts_delete_own" on public.price_alerts;
+create policy "alerts_delete_own"
+  on public.price_alerts for delete using (auth.uid () = user_id);
+drop policy if exists "alerts_update_own" on public.price_alerts;
+create policy "alerts_update_own"
+  on public.price_alerts for update
+  using (auth.uid () = user_id) with check (auth.uid () = user_id);

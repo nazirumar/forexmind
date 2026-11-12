@@ -20,7 +20,7 @@
  *    server. This gives instant feedback before the network round-trip.
  */
 import { useState, useRef } from "react";
-import { Download, Upload, FileSpreadsheet, Loader2, AlertTriangle, CheckCircle2, FileDown } from "lucide-react";
+import { Download, Upload, FileSpreadsheet, Loader2, AlertTriangle, CheckCircle2, FileDown, FileText } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -42,6 +42,7 @@ type PreviewResult = {
 export function ImportExportPanel({ onImported }: { onImported?: () => void }) {
   const [importing, setImporting] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [reporting, setReporting] = useState(false);
   const [result, setResult] = useState<ImportResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<PreviewResult | null>(null);
@@ -77,6 +78,41 @@ export function ImportExportPanel({ onImported }: { onImported?: () => void }) {
       );
     } finally {
       setExporting(false);
+    }
+  };
+
+  /** Download a PDF performance report for the last 30 days. */
+  const handleReport = async () => {
+    setReporting(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/trades/report");
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        if (res.status === 401) {
+          setError("Sign in to generate a report.");
+        } else {
+          setError(body?.error ?? `Failed (HTTP ${res.status})`);
+        }
+        return;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      const disp = res.headers.get("Content-Disposition") ?? "";
+      const match = disp.match(/filename="?([^";]+)"?/);
+      a.download = match?.[1] ?? "forexmind-report.pdf";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Network error - please try again.",
+      );
+    } finally {
+      setReporting(false);
     }
   };
 
@@ -200,6 +236,20 @@ export function ImportExportPanel({ onImported }: { onImported?: () => void }) {
               <Download className="h-4 w-4" aria-hidden="true" />
             )}
             <span className="ml-1">Export CSV</span>
+          </Button>
+
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleReport}
+            disabled={reporting}
+          >
+            {reporting ? (
+              <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+            ) : (
+              <FileText className="h-4 w-4" aria-hidden="true" />
+            )}
+            <span className="ml-1">PDF report</span>
           </Button>
 
           <Button

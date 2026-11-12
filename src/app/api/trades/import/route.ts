@@ -28,6 +28,8 @@ import { z } from "zod";
 import { UnauthorizedError, getUserOrThrow, enforceRateLimit } from "@/lib/auth";
 import { TradesError, bulkCreateTrades } from "@/lib/trades/queries";
 import { parseTradesCsv } from "@/lib/trades/csv";
+import { parseBrokerCsv, detectBroker } from "@/lib/trades/broker-csv";
+import { parseCsv } from "@/lib/trades/csv";
 
 export const runtime = "nodejs";
 
@@ -74,8 +76,18 @@ export async function POST(req: Request) {
       );
     }
 
-    // 4. Parse the CSV (pure function).
-    const result = parseTradesCsv(parsed.data.csv);
+    // 4. Parse the CSV. Auto-detect broker format (MT4/MT5/OANDA) from
+    //    the header; fall back to the generic ForexMind format if no
+    //    broker signature matches.
+    let result;
+    const csvRows = parseCsv(parsed.data.csv);
+    const header = csvRows[0]?.map((h) => h.trim()) ?? [];
+    const broker = detectBroker(header);
+    if (broker) {
+      result = parseBrokerCsv(parsed.data.csv);
+    } else {
+      result = parseTradesCsv(parsed.data.csv);
+    }
 
     // 5. Cap at MAX_TRADES_PER_IMPORT.
     if (result.valid.length > MAX_TRADES_PER_IMPORT) {

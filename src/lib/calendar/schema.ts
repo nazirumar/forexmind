@@ -144,3 +144,78 @@ export function timeUntil(iso: string, nowMs: number = Date.now()): string {
   const day = Math.round(hr / 24);
   return isPast ? `${day}d ago` : `in ${day}d`;
 }
+
+// ---------------------------------------------------------------------------
+// Filtering + grouping (Phase 19)
+// ---------------------------------------------------------------------------
+
+/** Filter dimension for the calendar UI. */
+export type CalendarFilter = {
+  /** "all" or a single impact level. */
+  impact: "all" | Impact;
+  /** "all" or a 3-letter ISO currency code (e.g. "USD"). Case-insensitive. */
+  currency: "all" | string;
+  /** When true, only show events currently inside their no-trade window. */
+  noTradeOnly: boolean;
+};
+
+export const EMPTY_CALENDAR_FILTER: CalendarFilter = {
+  impact: "all",
+  currency: "all",
+  noTradeOnly: false,
+};
+
+/** Apply a CalendarFilter to a list of events. Pure. */
+export function filterEvents(
+  events: EconomicEvent[],
+  f: CalendarFilter,
+  nowMs: number = Date.now(),
+): EconomicEvent[] {
+  return events.filter((e) => {
+    if (f.impact !== "all" && e.impact !== f.impact) return false;
+    if (f.currency !== "all") {
+      if (e.currency.toUpperCase() !== f.currency.toUpperCase()) return false;
+    }
+    if (f.noTradeOnly && !isInNoTradeWindow(e, nowMs)) return false;
+    return true;
+  });
+}
+
+/**
+ * Group events by their UTC date (YYYY-MM-DD).
+ *
+ * Returns an array of `{ date, events }` sorted by date ascending.
+ * Pure.
+ */
+export function groupByDate(
+  events: EconomicEvent[],
+): { date: string; events: EconomicEvent[] }[] {
+  const groups = new Map<string, EconomicEvent[]>();
+  for (const e of events) {
+    const d = new Date(e.time);
+    if (Number.isNaN(d.getTime())) continue;
+    const key = e.time.slice(0, 10); // YYYY-MM-DD
+    const arr = groups.get(key) ?? [];
+    arr.push(e);
+    groups.set(key, arr);
+  }
+  const out = [...groups.entries()]
+    .map(([date, evs]) => ({
+      date,
+      events: evs.sort((a, b) => Date.parse(a.time) - Date.parse(b.time)),
+    }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+  return out;
+}
+
+/** Format a YYYY-MM-DD date key as "Mon, Jan 15". */
+export function formatDateKey(dateKey: string): string {
+  const d = new Date(dateKey + "T00:00:00Z");
+  if (Number.isNaN(d.getTime())) return dateKey;
+  return d.toLocaleString("en-US", {
+    weekday: "short",
+    month: "short",
+    day: "2-digit",
+    timeZone: "UTC",
+  });
+}
