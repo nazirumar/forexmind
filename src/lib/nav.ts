@@ -10,6 +10,7 @@ import {
   BookOpen,
   Newspaper,
   ShieldCheck,
+  Settings,
   type LucideIcon,
 } from "lucide-react";
 
@@ -56,5 +57,11 @@ export const NAV_ITEMS: NavItem[] = [
     href: "/checker",
     icon: ShieldCheck,
     description: "Validate an idea vs your rules",
+  },
+  {
+    label: "Settings",
+    href: "/settings",
+    icon: Settings,
+    description: "Profile + trading defaults",
   },
 ];

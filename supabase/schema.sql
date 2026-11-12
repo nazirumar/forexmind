@@ -48,6 +48,23 @@ create table if not exists public.ai_analyses (
 comment on table public.ai_analyses is
   'Saved AI analyses (journal analysis, market brief, trade check). `type` distinguishes them.';
 
+-- ------------------------------------------------------------
+-- Table: profiles (user preferences + trading defaults)
+-- Phase 16: one row per user, keyed by user_id.
+-- ------------------------------------------------------------
+create table if not exists public.profiles (
+  user_id          uuid primary key references auth.users (id) on delete cascade,
+  display_name     text,
+  default_balance  numeric,
+  default_risk_pct numeric check (default_risk_pct is null or (default_risk_pct >= 0 and default_risk_pct <= 100)),
+  preferred_session text check (preferred_session in ('asian', 'london', 'newyork', 'overlap')),
+  default_pair     text,
+  updated_at       timestamptz not null default now()
+);
+
+comment on table public.profiles is
+  'ForexMind user profile: display name + default trading parameters. One row per user.';
+
 -- Helpful indexes for the queries ForexMind runs (last N trades per user).
 create index if not exists trades_user_created_idx
   on public.trades (user_id, created_at desc);
@@ -61,6 +78,7 @@ create index if not exists ai_analyses_user_type_created_idx
 
 alter table public.trades      enable row level security;
 alter table public.ai_analyses enable row level security;
+alter table public.profiles    enable row level security;
 
 -- ---------------- trades policies ----------------
 drop policy if exists "trades_select_own" on public.trades;
@@ -104,4 +122,27 @@ create policy "ai_analyses_update_own"
 drop policy if exists "ai_analyses_delete_own" on public.ai_analyses;
 create policy "ai_analyses_delete_own"
   on public.ai_analyses for delete
+  using (auth.uid () = user_id);
+
+-- ---------------- profiles policies ----------------
+-- A user can only read/update their own profile row.
+drop policy if exists "profiles_select_own" on public.profiles;
+create policy "profiles_select_own"
+  on public.profiles for select
+  using (auth.uid () = user_id);
+
+drop policy if exists "profiles_upsert_own" on public.profiles;
+create policy "profiles_upsert_own"
+  on public.profiles for insert
+  with check (auth.uid () = user_id);
+
+drop policy if exists "profiles_update_own" on public.profiles;
+create policy "profiles_update_own"
+  on public.profiles for update
+  using (auth.uid () = user_id)
+  with check (auth.uid () = user_id);
+
+drop policy if exists "profiles_delete_own" on public.profiles;
+create policy "profiles_delete_own"
+  on public.profiles for delete
   using (auth.uid () = user_id);

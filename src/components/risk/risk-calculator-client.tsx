@@ -109,6 +109,43 @@ export function RiskCalculatorClient() {
     };
   }, []);
 
+  // Profile defaults: fetch on mount. If the user has a profile with
+  // default_balance / default_risk_pct / default_pair set, AND the URL
+  // didn't specify ?pair= (URL param wins), apply the profile defaults.
+  // This only runs ONCE on mount - subsequent edits respect the user's
+  // typing.
+  useEffect(() => {
+    let active = true;
+    fetch("/api/profile")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((profile) => {
+        if (!active || !profile) return;
+        setForm((prev) => {
+          const next = { ...prev };
+          // Only apply profile defaults if the URL didn't specify ?pair=
+          if (!searchParams.get("pair") && profile.default_pair) {
+            next.pair = profile.default_pair;
+          }
+          if (profile.default_balance != null && prev.balance === "10000") {
+            next.balance = String(profile.default_balance);
+          }
+          if (profile.default_risk_pct != null && prev.riskPct === "1") {
+            next.riskPct = String(profile.default_risk_pct);
+          }
+          return next;
+        });
+      })
+      .catch(() => {
+        // Profile fetch failed (not signed in, or endpoint error).
+        // Silently fall back to hardcoded defaults - the calculator
+        // still works without a profile.
+      });
+    return () => {
+      active = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // run once on mount
+
   // Auto-fill currentPrice when:
   //  - the pair needs a price (JPY quote, USD base, or cross), AND
   //  - we have a live rate for it, AND
