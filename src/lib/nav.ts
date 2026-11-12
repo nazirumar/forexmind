@@ -10,6 +10,7 @@ import {
   BookOpen,
   Newspaper,
   ShieldCheck,
+  ClipboardList,
   Settings,
   type LucideIcon,
 } from "lucide-react";
@@ -51,6 +52,12 @@ export const NAV_ITEMS: NavItem[] = [
     href: "/news",
     icon: Newspaper,
     description: "Headlines + AI market brief",
+  },
+  {
+    label: "Plan Coach",
+    href: "/plan",
+    icon: ClipboardList,
+    description: "Pre-trade plan vs your rules",
   },
   {
     label: "Trade Checker",

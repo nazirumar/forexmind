@@ -57,6 +57,8 @@ export type RateLimitConfig = {
  *    Covers /api/chat and /api/news/brief (these consume Groq tokens).
  *  - checker: 10 checks per minute burst, refills at 0.5/sec.
  *    /api/checker - heavier per-call (1500 tokens, JSON output).
+ *  - plan: 10 plans per minute burst, refills at 0.5/sec.
+ *    /api/plan - similar weight to checker (deterministic rules + Groq).
  *  - write: 60 mutations per minute, refills at 2/sec.
  *    /api/trades POST/PATCH/DELETE - cheap DB ops, allow generous
  *    headroom for legit UI clicks (table scroll, filter, etc.).
@@ -69,6 +71,7 @@ export type RateLimitConfig = {
 export const RATE_LIMITS = {
   ai: { capacity: 20, refillPerSec: 1, prefix: "ai" },
   checker: { capacity: 10, refillPerSec: 0.5, prefix: "checker" },
+  plan: { capacity: 10, refillPerSec: 0.5, prefix: "plan" },
   write: { capacity: 60, refillPerSec: 2, prefix: "write" },
   read: { capacity: 120, refillPerSec: 4, prefix: "read" },
 } as const satisfies Record<string, RateLimitConfig>;
