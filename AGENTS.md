@@ -14,7 +14,7 @@ The AI is advisory-only: it never predicts prices and never says "buy/sell". Eve
 - Single test file: `bunx vitest run src/lib/risk.test.ts` (or add `-t "name"`).
 - After changing `prisma/schema.prisma`: `bun run db:push` (runs with `--accept-data-loss`). There is no `prisma/migrations/` dir — `db:migrate`/`db:reset` will fail; don't use them.
 - **Prisma CLI reads `.env`, not `.env.local`** (only Next.js loads `.env.local`). Keep `DATABASE_URL` in both files or Prisma commands fail with "Environment variable not found".
-- **`bun run dev` fails on Windows** — the script pipes to `tee`, which bun's Windows shell lacks. Use `bunx next dev -p 3000` instead.
+- **`bun run dev` is Windows-safe** — `scripts/dev.mjs` tees output to `dev.log` with Node streams (the old `| tee` script failed because bun's Windows shell has no `tee`). Ctrl+C kills it cleanly.
 - Required env in `.env.local` (git-ignored; a committed `.env.example` template exists): `DATABASE_URL` (Neon Postgres), `AUTH_SECRET` (≥16 chars), `GROQ_API_KEY`; optional `FINNHUB_API_KEY`, `TWELVE_DATA_API_KEY`. Validated lazily by zod in `src/lib/env.ts` — import `getEnv()`, not `process.env`.
 
 ## Architecture notes
