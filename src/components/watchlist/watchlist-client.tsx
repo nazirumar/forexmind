@@ -35,6 +35,13 @@ import {
 } from "@/lib/watchlist/schema";
 import { formatPair } from "@/lib/trades/schema";
 import type { PriceResponse, PriceQuote } from "@/lib/prices/schema";
+import {
+  baselineQuotes,
+  ChangeBadge,
+  PairLabel,
+  RateDigits,
+  pipDigits,
+} from "@/components/prices/rate-display";
 
 export function WatchlistClient() {
   const [loaded, setLoaded] = useState(false);
@@ -72,6 +79,7 @@ export function WatchlistClient() {
       if (Array.isArray(alBody.alerts)) setAlerts(alBody.alerts);
       const prBody: PriceResponse = await prRes.json().catch(() => null);
       if (prBody?.quotes) {
+        baselineQuotes(prBody.quotes);
         setPrices(new Map(prBody.quotes.map((q) => [q.pair, q])));
         setPricesFetchedAt(prBody.fetched_at);
         setPricesNote(prBody.note ?? null);
@@ -220,15 +228,24 @@ export function WatchlistClient() {
                   return (
                     <div
                       key={item.id}
-                      className="flex items-center justify-between rounded-md border px-3 py-2 text-sm"
+                      className="group flex items-center justify-between rounded-md border px-3 py-2 transition-colors hover:bg-accent/40"
                     >
-                      <span className="font-medium">
-                        {formatPair(item.pair)}
-                      </span>
                       <div className="flex items-center gap-2">
-                        <span className="tabular-nums text-muted-foreground">
-                          {q ? q.rate.toFixed(pipDigits(item.pair)) : "—"}
-                        </span>
+                        {q ? <PairLabel pair={item.pair} /> : (
+                          <span className="text-sm font-medium">
+                            {formatPair(item.pair)}
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {q ? (
+                          <>
+                            <RateDigits pair={item.pair} rate={q.rate} />
+                            <ChangeBadge quote={q} />
+                          </>
+                        ) : (
+                          <span className="tabular-nums text-muted-foreground">—</span>
+                        )}
                         {q?.stale && (
                           <Badge variant="outline" className="text-[10px]">
                             stale
@@ -389,8 +406,14 @@ export function WatchlistClient() {
                         )}
                       </div>
                       <div className="flex items-center gap-2">
+                        {q && <ChangeBadge quote={q} />}
                         <span className="text-xs tabular-nums text-muted-foreground">
-                          now: {q ? q.rate.toFixed(pipDigits(a.pair)) : "—"}
+                          now:{" "}
+                          {q ? (
+                            <RateDigits pair={a.pair} rate={q.rate} />
+                          ) : (
+                            "—"
+                          )}
                         </span>
                         <Button
                           variant="ghost"
@@ -417,13 +440,6 @@ export function WatchlistClient() {
       </p>
     </div>
   );
-}
-
-/** Digits after the decimal point to display for a pair's rate. */
-function pipDigits(pair: string): number {
-  if (pair.endsWith("JPY")) return 3;
-  if (pair === "XAUUSD") return 2;
-  return 5;
 }
 
 /** "Nov 14" style short date for the Fired badge. */

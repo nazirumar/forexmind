@@ -230,6 +230,33 @@ export function TradeForm({ initial, onSaved, onCancel }: Props) {
     { time: string; title: string }[]
   >([]);
 
+  // Dynamic vocabulary: strategy / emotion suggestions come from the
+  // values THIS user has actually logged before (via /api/trades/meta).
+  // Nothing is hardcoded - the form learns the user's own terms.
+  const [historyMeta, setHistoryMeta] = useState<{
+    strategies: string[];
+    emotions: string[];
+  }>({ strategies: [], emotions: [] });
+
+  useEffect(() => {
+    let active = true;
+    fetch("/api/trades/meta")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((meta) => {
+        if (!active || !meta) return;
+        setHistoryMeta({
+          strategies: Array.isArray(meta.strategies) ? meta.strategies : [],
+          emotions: Array.isArray(meta.emotions) ? meta.emotions : [],
+        });
+      })
+      .catch(() => {
+        // Meta fetch failed - inputs just have no suggestions.
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
   useEffect(() => {
     let active = true;
     fetch("/api/calendar")
@@ -768,10 +795,16 @@ export function TradeForm({ initial, onSaved, onCancel }: Props) {
           <Label htmlFor="strategy">Strategy</Label>
           <Input
             id="strategy"
-            placeholder="trend / breakout / fade"
+            list="strategy-suggestions"
+            placeholder={historyMeta.strategies.length > 0 ? historyMeta.strategies.slice(0, 2).join(" / ") : "trend / breakout / fade"}
             value={form.strategy}
             onChange={(e) => set("strategy", e.target.value)}
           />
+          <datalist id="strategy-suggestions">
+            {historyMeta.strategies.map((s) => (
+              <option key={s} value={s} />
+            ))}
+          </datalist>
         </div>
         <div className="space-y-1.5">
           <Label htmlFor="session">Session</Label>
@@ -796,10 +829,16 @@ export function TradeForm({ initial, onSaved, onCancel }: Props) {
           <Label htmlFor="emotion">Emotion</Label>
           <Input
             id="emotion"
-            placeholder="calm / FOMO / revenge"
+            list="emotion-suggestions"
+            placeholder={historyMeta.emotions.length > 0 ? historyMeta.emotions.slice(0, 2).join(" / ") : "calm / FOMO / revenge"}
             value={form.emotion}
             onChange={(e) => set("emotion", e.target.value)}
           />
+          <datalist id="emotion-suggestions">
+            {historyMeta.emotions.map((e) => (
+              <option key={e} value={e} />
+            ))}
+          </datalist>
         </div>
       </div>
 

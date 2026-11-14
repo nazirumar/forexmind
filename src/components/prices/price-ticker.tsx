@@ -16,54 +16,21 @@
  *  - Edge fades + hidden scrollbar for a clean strip look.
  */
 import { useEffect, useRef, useState } from "react";
-import { RefreshCw, Loader2, TrendingDown, TrendingUp } from "lucide-react";
+import { RefreshCw, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
-  formatRate,
-  pctChange,
   type PriceResponse,
   type PriceQuote,
 } from "@/lib/prices/schema";
+import {
+  baselineQuotes,
+  ChangeBadge,
+  PairLabel,
+  RateDigits,
+} from "@/components/prices/rate-display";
 
 /** Poll interval for silent refreshes (server cache TTL is 5 min). */
 const SILENT_REFRESH_MS = 60_000;
-
-const FLAGS: Record<string, string> = {
-  USD: "🇺🇸",
-  EUR: "🇪🇺",
-  GBP: "🇬🇧",
-  JPY: "🇯🇵",
-  CHF: "🇨🇭",
-  AUD: "🇦🇺",
-  CAD: "🇨🇦",
-  NZD: "🇳🇿",
-  XAU: "🥇",
-};
-
-/** sessionStorage baseline key: per calendar day + pair. */
-function baselineKey(pair: string): string {
-  const day = new Date().toISOString().slice(0, 10);
-  return `fm_rate_baseline_${day}_${pair}`;
-}
-
-function readBaseline(pair: string): number | null {
-  try {
-    const raw = sessionStorage.getItem(baselineKey(pair));
-    if (raw == null) return null;
-    const n = Number(raw);
-    return Number.isFinite(n) && n > 0 ? n : null;
-  } catch {
-    return null;
-  }
-}
-
-function writeBaseline(pair: string, rate: number): void {
-  try {
-    sessionStorage.setItem(baselineKey(pair), String(rate));
-  } catch {
-    // Private mode etc. - change badges just stay hidden.
-  }
-}
 
 /** "19:36" from an ISO timestamp, in the viewer's local time. */
 function formatClock(iso: string): string {
@@ -89,9 +56,7 @@ export function PriceTicker({ className }: { className?: string }) {
         const json: PriceResponse = await res.json();
         // Baseline the first rate seen per pair today (once), so the
         // change badge shows the move since the session started.
-        for (const q of json.quotes) {
-          if (readBaseline(q.pair) == null) writeBaseline(q.pair, q.rate);
-        }
+        baselineQuotes(json.quotes);
         setData(json);
         setTick((t) => t + 1);
       }
@@ -214,46 +179,7 @@ export function PriceTicker({ className }: { className?: string }) {
   );
 }
 
-/** Split a formatted rate into muted big figures + emphasized pips. */
-function RateDigits({ pair, rate }: { pair: string; rate: number }) {
-  const formatted = formatRate(pair, rate);
-  // JPY pairs: "159.799" -> emphasize "799". Others: "1.10381" -> "381".
-  const pips = pair.endsWith("JPY") ? 3 : 3;
-  const split = Math.max(0, formatted.length - pips);
-  const big = formatted.slice(0, split);
-  const small = formatted.slice(split);
-  return (
-    <span className="font-mono text-xs tabular-nums">
-      <span className="text-muted-foreground">{big}</span>
-      <span className="font-semibold text-foreground">{small}</span>
-    </span>
-  );
-}
-
-function ChangeBadge({ quote }: { quote: PriceQuote }) {
-  const baseline = readBaseline(quote.pair);
-  const change = pctChange(baseline, quote.rate);
-  if (change == null) return null;
-  const up = change > 0;
-  const Icon = up ? TrendingUp : TrendingDown;
-  return (
-    <span
-      className={cn(
-        "flex items-center gap-0.5 rounded px-1 py-0.5 font-mono text-[10px] font-medium tabular-nums",
-        up ? "bg-emerald-500/10 text-emerald-500" : "bg-red-500/10 text-red-500",
-      )}
-      title={`Since you first loaded today: ${baseline != null ? formatRate(quote.pair, baseline) : ""}`}
-    >
-      <Icon className="h-2.5 w-2.5" aria-hidden="true" />
-      {up ? "+" : ""}
-      {change.toFixed(2)}%
-    </span>
-  );
-}
-
 function TickerItem({ quote }: { quote: PriceQuote }) {
-  const base = quote.pair.slice(0, 3);
-  const quoteCcy = quote.pair.slice(3);
   return (
     <a
       href={`/risk-calculator?pair=${quote.pair}`}
@@ -262,15 +188,9 @@ function TickerItem({ quote }: { quote: PriceQuote }) {
         "hover:bg-accent/60",
         quote.stale && "opacity-50",
       )}
-      title={`${base}/${quoteCcy} — click to open in the risk calculator`}
+      title={`${quote.pair} — click to open in the risk calculator`}
     >
-      <span className="text-sm leading-none" aria-hidden="true">
-        {FLAGS[base] ?? ""}
-      </span>
-      <span className="font-mono text-xs font-medium leading-none">
-        {base}
-        <span className="text-muted-foreground/60">/{quoteCcy}</span>
-      </span>
+      <PairLabel pair={quote.pair} />
       <RateDigits pair={quote.pair} rate={quote.rate} />
       <ChangeBadge quote={quote} />
     </a>

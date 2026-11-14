@@ -622,6 +622,8 @@ export type TradeFilter = {
   tag: string | null;
   session: Session | "all";
   strategy: string | null;
+  /** Exact match (case-insensitive) against trade.emotion. */
+  emotion: string | null;
   outcome: OutcomeFilter;
   followedPlan: boolean | null;
   openedFrom: string | null;
@@ -635,6 +637,7 @@ export const EMPTY_FILTER: TradeFilter = {
   tag: null,
   session: "all",
   strategy: null,
+  emotion: null,
   outcome: "all",
   followedPlan: null,
   openedFrom: null,
@@ -649,6 +652,7 @@ export function isFilterEmpty(f: TradeFilter): boolean {
     f.tag === null &&
     f.session === "all" &&
     f.strategy === null &&
+    f.emotion === null &&
     f.outcome === "all" &&
     f.followedPlan === null &&
     f.openedFrom === null &&
@@ -699,6 +703,9 @@ export function parseTradeFilter(
   const stratRaw = get("strategy");
   const strategy = stratRaw && stratRaw.trim() !== "" ? stratRaw.trim() : null;
 
+  const emoRaw = get("emotion");
+  const emotion = emoRaw && emoRaw.trim() !== "" ? emoRaw.trim() : null;
+
   const outcomeRaw = (get("outcome") ?? "all").toLowerCase();
   const outcome: OutcomeFilter = (
     OUTCOME_FILTERS as readonly string[]
@@ -730,6 +737,7 @@ export function parseTradeFilter(
     tag,
     session,
     strategy,
+    emotion,
     outcome,
     followedPlan,
     openedFrom,
@@ -753,6 +761,14 @@ export function matchesFilter(t: TradeRow, f: TradeFilter): boolean {
     if (
       t.strategy == null ||
       t.strategy.toLowerCase() !== f.strategy.toLowerCase()
+    ) {
+      return false;
+    }
+  }
+  if (f.emotion !== null) {
+    if (
+      t.emotion == null ||
+      t.emotion.toLowerCase() !== f.emotion.toLowerCase()
     ) {
       return false;
     }

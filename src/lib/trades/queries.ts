@@ -441,6 +441,58 @@ export async function fetchTradesForUserId(
   }
 }
 
+/**
+ * Distinct label values the user has actually used, for dynamic form
+ * suggestions + filters: tags (slugified, sorted) plus the free-text
+ * strategy / emotion / timeframe values they've typed before.
+ *
+ * This is what makes the journal "learn" the user's own vocabulary:
+ * the trade form suggests `breakout`, `news fade`, `calm`, `FOMO` —
+ * whatever THIS user has logged — rather than a hardcoded list.
+ */
+export async function listDistinctMeta(): Promise<{
+  tags: string[];
+  strategies: string[];
+  emotions: string[];
+  timeframes: string[];
+}> {
+  const { user } = await context();
+  let rows: { tags: string[]; strategy: string | null; emotion: string | null; timeframe: string | null }[];
+  try {
+    rows = await db.trade.findMany({
+      where: { userId: user.id },
+      select: { tags: true, strategy: true, emotion: true, timeframe: true },
+      take: 2000,
+    });
+  } catch (err) {
+    throw new TradesError(500, `Failed to list trade meta: ${errMessage(err)}`);
+  }
+
+  const tagSet = new Set<string>();
+  for (const row of rows) {
+    if (Array.isArray(row.tags)) {
+      for (const tag of row.tags) {
+        if (typeof tag === "string" && tag !== "") tagSet.add(tag);
+      }
+    }
+  }
+  const collect = (get: (r: (typeof rows)[number]) => string | null) => {
+    const set = new Set<string>();
+    for (const row of rows) {
+      const v = get(row);
+      if (v && v.trim() !== "") set.add(v.trim());
+    }
+    return [...set].sort((a, b) => a.localeCompare(b));
+  };
+
+  return {
+    tags: [...tagSet].sort((a, b) => a.localeCompare(b)),
+    strategies: collect((r) => r.strategy),
+    emotions: collect((r) => r.emotion),
+    timeframes: collect((r) => r.timeframe),
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Filter → Prisma where
 // ---------------------------------------------------------------------------
@@ -456,6 +508,9 @@ function buildWhere(userId: string, filter: TradeFilter) {
   if (filter.session !== "all") where.session = filter.session;
   if (filter.strategy) {
     where.strategy = { equals: filter.strategy, mode: "insensitive" };
+  }
+  if (filter.emotion) {
+    where.emotion = { equals: filter.emotion, mode: "insensitive" };
   }
   if (filter.followedPlan !== null) where.followedPlan = filter.followedPlan;
 

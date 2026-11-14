@@ -157,6 +157,24 @@ export function JournalClient() {
   // query params would yield the same rows.
   const filtered = useMemo(() => applyTradeFilter(trades, filter), [trades, filter]);
 
+  /** Strategies the user has actually logged (dynamic filter options). */
+  const strategyOptions = useMemo(
+    () =>
+      [...new Set(trades.map((t) => t.strategy).filter(
+        (s): s is string => Boolean(s && s.trim()),
+      ))].sort((a, b) => a.localeCompare(b)),
+    [trades],
+  );
+
+  /** Emotions the user has actually logged (dynamic filter options). */
+  const emotionOptions = useMemo(
+    () =>
+      [...new Set(trades.map((t) => t.emotion).filter(
+        (e): e is string => Boolean(e && e.trim()),
+      ))].sort((a, b) => a.localeCompare(b)),
+    [trades],
+  );
+
   // Recompute stats over the filtered subset so the panel reflects
   // what the user is actually looking at.
   const filteredStats = useMemo(() => {
@@ -417,6 +435,54 @@ export function JournalClient() {
                   {s[0].toUpperCase() + s.slice(1)}
                 </SelectItem>
               ))}
+            </SelectContent>
+          </Select>
+          <Select
+            value={filter.strategy ?? "all"}
+            onValueChange={(v) =>
+              setFilter((f) => ({ ...f, strategy: v === "all" ? null : v }))
+            }
+          >
+            <SelectTrigger className="h-8 w-[130px] text-xs" aria-label="Filter by strategy">
+              <SelectValue placeholder="Strategy" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All strategies</SelectItem>
+              {strategyOptions.length === 0 ? (
+                <SelectItem value="__none" disabled>
+                  None logged yet
+                </SelectItem>
+              ) : (
+                strategyOptions.map((s) => (
+                  <SelectItem key={s} value={s}>
+                    {s}
+                  </SelectItem>
+                ))
+              )}
+            </SelectContent>
+          </Select>
+          <Select
+            value={filter.emotion ?? "all"}
+            onValueChange={(v) =>
+              setFilter((f) => ({ ...f, emotion: v === "all" ? null : v }))
+            }
+          >
+            <SelectTrigger className="h-8 w-[120px] text-xs" aria-label="Filter by emotion">
+              <SelectValue placeholder="Emotion" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All emotions</SelectItem>
+              {emotionOptions.length === 0 ? (
+                <SelectItem value="__none" disabled>
+                  None logged yet
+                </SelectItem>
+              ) : (
+                emotionOptions.map((e) => (
+                  <SelectItem key={e} value={e}>
+                    {e}
+                  </SelectItem>
+                ))
+              )}
             </SelectContent>
           </Select>
           <Select
