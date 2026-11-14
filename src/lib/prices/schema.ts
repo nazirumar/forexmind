@@ -107,6 +107,32 @@ export function deriveQuotes(
   return out;
 }
 
+/**
+ * Compute a percentage change against a baseline.
+ *
+ * The free rates API returns no historical/day-change data, so the
+ * ticker stores the first rate it sees for each pair per calendar
+ * day (in sessionStorage) and shows the move since then. Returns
+ * null when there's no baseline or nothing has moved — the UI hides
+ * the change badge in that case.
+ */
+export function pctChange(
+  baseline: number | null | undefined,
+  rate: number,
+): number | null {
+  if (
+    baseline == null ||
+    !Number.isFinite(baseline) ||
+    baseline <= 0 ||
+    !Number.isFinite(rate) ||
+    rate <= 0 ||
+    baseline === rate
+  ) {
+    return null;
+  }
+  return ((rate - baseline) / baseline) * 100;
+}
+
 /** Format a rate for display. 5 significant digits for non-JPY, 3 for JPY pairs. */
 export function formatRate(pair: string, rate: number): string {
   if (!Number.isFinite(rate)) return "—";
