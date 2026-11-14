@@ -33,6 +33,7 @@ model User {
   plans         TradePlan[]
   watchlist     Watchlist[]
   alerts        PriceAlert[]
+  accounts      Account[]
 }
 
 // ---------------------------------------------------------------------------
@@ -72,10 +73,39 @@ model Trade {
   screenshotAfterUrl String?
 
   user          User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  account       Account?   @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  accountId     String?
   linkedPlans   TradePlan[]
 
   @@index([userId, createdAt(sort: Desc)])
   @@index([userId, closedAt(sort: Desc)])
+  @@index([accountId])
+}
+
+// ---------------------------------------------------------------------------
+// Multi-account support (feature 4)
+// ---------------------------------------------------------------------------
+
+/**
+ * A trading account (live / demo / prop firm) that owns trades.
+ *
+ * Every user gets a "Main account" lazily on first use; existing
+ * trades are backfilled to it. Watchlist, alerts, goals and plans
+ * stay user-level: an account is the trading log boundary, not the
+ * whole app boundary.
+ */
+model Account {
+  id        String   @id @default(uuid())
+  userId    String
+  name      String
+  kind      String   @default("live") // live | demo | prop
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  trades    Trade[]
+
+  @@unique([userId, name])
+  @@index([userId, createdAt])
 }
 
 model AiAnalysis {

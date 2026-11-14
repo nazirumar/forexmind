@@ -20,6 +20,7 @@ import { db } from "@/lib/db";
 import type { Trade as PrismaTrade } from "@prisma/client";
 import { getUserOrThrow } from "@/lib/auth";
 import type { SessionUser } from "@/lib/auth";
+import { getSelectedAccountId, resolveTradeAccountId } from "@/lib/accounts/queries";
 import {
   computeStats,
   tradeRowSchema,
@@ -51,10 +52,15 @@ export class TradesError extends Error {
 /** Upper bound on the list endpoint. Past this we'd need real pagination. */
 const MAX_LIST_LIMIT = 200;
 
-/** Fetch the current user (auth happens exactly once per call). */
-async function context(): Promise<{ user: SessionUser }> {
+/** Fetch the current user + selected trading account (auth once per call). */
+async function context(): Promise<{
+  user: SessionUser;
+  /** Selected account id, or null = all accounts. */
+  accountId: string | null;
+}> {
   const user = await getUserOrThrow();
-  return { user };
+  const accountId = await getSelectedAccountId(user.id);
+  return { user, accountId };
 }
 
 /**
@@ -127,12 +133,17 @@ function createInputToData(input: TradeCreate, userId: string) {
 /**
  * Insert a new trade. user_id is taken from the authenticated session
  * (NEVER from the request body) so a malicious client can't write
- * trades into someone else's journal.
+ * trades into someone else's journal. The trade is stamped with the
+ * selected trading account (or the user's default account when "all
+ * accounts" is active).
  */
 export async function createTrade(input: TradeCreate): Promise<TradeRow> {
   const { user } = await context();
   try {
-    const created = await db.trade.create({ data: createInputToData(input, user.id) });
+    const accountId = await resolveTradeAccountId(user.id);
+    const created = await db.trade.create({
+      data: { ...createInputToData(input, user.id), accountId },
+    });
     return toTradeRow(created);
   } catch (err) {
     throw new TradesError(500, `Failed to create trade: ${errMessage(err)}`);
@@ -153,8 +164,12 @@ export async function bulkCreateTrades(inputs: TradeCreate[]): Promise<TradeRow[
   const { user } = await context();
   if (inputs.length === 0) return [];
   try {
+    const accountId = await resolveTradeAccountId(user.id);
     const created = await db.trade.createManyAndReturn({
-      data: inputs.map((input) => createInputToData(input, user.id)),
+      data: inputs.map((input) => ({
+        ...createInputToData(input, user.id),
+        accountId,
+      })),
     });
     return created.map(toTradeRow);
   } catch (err) {
@@ -178,10 +193,13 @@ export async function listTrades(
   limit = 100,
   filter: TradeFilter = EMPTY_FILTER,
 ): Promise<TradeListResponse> {
-  const { user } = await context();
+  const { user, accountId } = await context();
   const capped = Math.max(1, Math.min(MAX_LIST_LIMIT, Math.floor(limit)));
 
   const where = buildWhere(user.id, filter);
+  // Multi-account: with an account selected, list only that account's
+  // trades (and compute stats for them); null = all accounts.
+  if (accountId) where.accountId = accountId;
 
   let trades: PrismaTrade[];
   try {
@@ -333,7 +351,7 @@ export type FetchTradesOpts = {
  * this instead so the Prisma query + snake_case mapping live in one place.
  */
 export async function fetchUserTrades(opts: FetchTradesOpts = {}): Promise<TradeRow[]> {
-  const { user } = await context();
+  const { user, accountId } = await context();
   const {
     limit = 200,
     orderBy = "createdAt",
@@ -345,6 +363,8 @@ export async function fetchUserTrades(opts: FetchTradesOpts = {}): Promise<Trade
   } = opts;
 
   const where: Record<string, unknown> = { userId: user.id };
+  // Multi-account: honor the selected account (null = all accounts).
+  if (accountId) where.accountId = accountId;
   const openedAt: Record<string, unknown> = {};
   if (openedFrom) openedAt.gte = openedFrom;
   if (openedTo) openedAt.lte = openedTo;

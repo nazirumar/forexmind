@@ -19,6 +19,7 @@
  */
 import { db } from "@/lib/db";
 import { getUserOrThrow } from "@/lib/auth";
+import { getSelectedAccountId } from "@/lib/accounts/queries";
 import { toTradeRow } from "@/lib/trades/queries";
 import type { TradeRow } from "@/lib/trades/schema";
 import type { ReviewVerdict } from "@/lib/journal/schema";
@@ -38,9 +39,15 @@ import { parseRecentReview, type RecentReview } from "@/lib/journal/schema";
  */
 export async function fetchTradesForReview(limit = 20): Promise<TradeRow[]> {
   const user = await getUserOrThrow();
+  // Honor the selected trading account (null = all accounts).
+  const accountId = await getSelectedAccountId(user.id);
   try {
     const trades = await db.trade.findMany({
-      where: { userId: user.id, closedAt: { not: null } },
+      where: {
+        userId: user.id,
+        closedAt: { not: null },
+        ...(accountId ? { accountId } : {}),
+      },
       orderBy: { closedAt: "desc" },
       take: Math.max(1, Math.min(50, limit)),
     });
