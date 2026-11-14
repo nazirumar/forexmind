@@ -168,4 +168,5 @@ model PriceAlert {
 
   @@index([userId, active])
   @@index([pair, active])
+  @@index([active, triggeredAt])
 }

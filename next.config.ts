@@ -63,6 +63,16 @@ const nextConfig: NextConfig = {
     ignoreBuildErrors: false,
   },
   reactStrictMode: false,
+  // Client-side router cache: reuse rendered pages for 30s of
+  // navigation (instead of a fresh server render on every click).
+  // All app pages are dynamic (per-user data), so without this every
+  // tab switch paid a full SSR + Neon round-trip cost.
+  experimental: {
+    staleTimes: {
+      dynamic: 30,
+      static: 180,
+    },
+  },
   async headers() {
     return [
       {

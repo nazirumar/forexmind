@@ -16,6 +16,7 @@ import {
   GitCompareArrows,
   Eye,
   Gauge,
+  PieChart,
   Settings,
   type LucideIcon,
 } from "lucide-react";
@@ -51,6 +52,12 @@ export const NAV_ITEMS: NavItem[] = [
     href: "/risk",
     icon: Gauge,
     description: "R-multiples, expectancy, exposure",
+  },
+  {
+    label: "Analytics",
+    href: "/analytics",
+    icon: PieChart,
+    description: "Breakdown by session, strategy, emotion",
   },
   {
     label: "Trade Journal",

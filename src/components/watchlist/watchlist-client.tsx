@@ -41,6 +41,8 @@ export function WatchlistClient() {
   const [authRequired, setAuthRequired] = useState(false);
   const [items, setItems] = useState<WatchlistRow[]>([]);
   const [alerts, setAlerts] = useState<AlertRow[]>([]);
+  /** Alerts the server sweep has fired (triggered_at stamped). */
+  const firedCount = alerts.filter((a) => a.triggered_at != null).length;
   const [prices, setPrices] = useState<Map<string, PriceQuote>>(new Map());
   const [pricesFetchedAt, setPricesFetchedAt] = useState<string | null>(null);
   const [pricesNote, setPricesNote] = useState<string | null>(null);
@@ -155,7 +157,7 @@ export function WatchlistClient() {
     <div className="space-y-6">
       <PageHeader
         title="Watchlist & Price Alerts"
-        description="Track the pairs you care about and set price alerts. Alerts are checked against live rates on this page - there's no push notification yet, so check back or refresh."
+        description="Track the pairs you care about and set price alerts. The server checks your alerts against live rates whenever prices refresh — fired alerts are highlighted below."
         icon={<Eye className="h-5 w-5" />}
         actions={
           <Button variant="outline" size="sm" onClick={() => void loadAll()}>
@@ -164,6 +166,24 @@ export function WatchlistClient() {
           </Button>
         }
       />
+
+      {/* Fired-alert banner: the server sweep fired these while you were away */}
+      {firedCount > 0 && (
+        <div
+          className="flex items-start gap-2.5 rounded-lg border border-amber-500/30 bg-amber-500/[0.08] px-3.5 py-2.5"
+          role="alert"
+        >
+          <BellRing className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" aria-hidden="true" />
+          <p className="text-xs leading-relaxed text-amber-200/90">
+            <strong>
+              {firedCount} alert{firedCount === 1 ? "" : "s"} fired
+            </strong>{" "}
+            since you set {firedCount === 1 ? "it" : "them"} — see the amber
+            rows below. Advisory only: a triggered alert is not a signal to
+            trade, it just means price crossed a level you chose to watch.
+          </p>
+        </div>
+      )}
 
       {pricesNote && (
         <div className="rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-600 dark:text-amber-400">
@@ -337,11 +357,18 @@ export function WatchlistClient() {
               <div className="space-y-1.5">
                 {alerts.map((a) => {
                   const q = prices.get(a.pair);
-                  const triggered = q ? checkAlert(a, q.rate) : false;
+                  // Authoritative: the server sweep stamped triggered_at
+                  // (this is how alerts fire while you're away). The live
+                  // check is instant feedback for thresholds crossed right now.
+                  const fired = a.triggered_at != null;
+                  const triggeringNow = !fired && q ? checkAlert(a, q.rate) : false;
+                  const triggered = fired || triggeringNow;
                   return (
                     <div
                       key={a.id}
-                      className="flex items-center justify-between rounded-md border px-3 py-2 text-sm"
+                      className={`flex items-center justify-between rounded-md border px-3 py-2 text-sm ${
+                        triggered ? "border-amber-500/40 bg-amber-500/[0.06]" : ""
+                      }`}
                     >
                       <div className="flex items-center gap-2">
                         {triggered ? (
@@ -355,9 +382,9 @@ export function WatchlistClient() {
                         <Badge variant="outline" className="text-[10px]">
                           {a.direction} {a.threshold}
                         </Badge>
-                        {triggered && (
+                        {fired && a.triggered_at && (
                           <Badge className="bg-amber-500 text-[10px] text-black">
-                            Triggered
+                            Fired {formatDateShort(a.triggered_at)}
                           </Badge>
                         )}
                       </div>
@@ -397,4 +424,11 @@ function pipDigits(pair: string): number {
   if (pair.endsWith("JPY")) return 3;
   if (pair === "XAUUSD") return 2;
   return 5;
+}
+
+/** "Nov 14" style short date for the Fired badge. */
+function formatDateShort(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }

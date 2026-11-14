@@ -17,6 +17,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { fetchLiveRates } from "@/lib/prices/fetch";
 import { enforceRateLimit } from "@/lib/auth";
+import { evaluateAlerts } from "@/lib/watchlist/sweep";
 
 export const runtime = "nodejs";
 export const revalidate = 300;
@@ -47,6 +48,13 @@ export async function GET(req: Request) {
 
   try {
     const result = await fetchLiveRates(qs.data.force);
+
+    // Piggyback the price-alert sweep on ticker refreshes: fresh rates
+    // are in the cache, so this is one cheap DB query. Fire-and-forget
+    // so the response latency doesn't change; the cron endpoint is the
+    // guaranteed path for schedulers.
+    void evaluateAlerts().catch(() => {});
+
     return NextResponse.json(result, { headers: rateHeaders });
   } catch (err) {
     console.error("[/api/prices] fetch failed:", err);
