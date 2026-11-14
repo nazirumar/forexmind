@@ -1,30 +1,33 @@
 /**
- * POST /api/journal/digest
- *   Generate a weekly AI performance digest.
+ * /api/journal/digest
+ *   POST   - generate a weekly AI performance digest (on demand).
+ *   GET    - the latest SAVED weekly digest (scheduled or on-demand).
  *
- * Flow:
+ * POST flow:
  *  1. Auth + rate-limit (AI bucket).
  *  2. Parse optional from/to date range (default: last 7 days).
- *  3. Fetch the user's trades in that window.
- *  4. Run detectPatterns() (deterministic).
- *  5. Build the DATA block and send to Groq (best-effort; if Groq
- *     isn't configured, return the patterns with a stub summary).
- *  6. Save to ai_analyses with type="weekly_digest".
- *  7. Return { id, summary, insights, question, patterns, ... }.
+ *  3. generateWeeklyDigest() in @/lib/journal/generate-digest does the
+ *     real work (trades -> patterns -> Groq -> save ai_analyses).
+ *  4. Return { id, summary, insights, question, patterns, ... }.
+ *
+ * GET flow (read-back):
+ *  Returns the user's most recent saved weekly digest. This is how
+ *  scheduled reviews (run by /api/cron/weekly-review while you were
+ *  away) surface in the journal panel. 200 with { digest: null } when
+ *  none exists yet.
  */
 import { NextResponse } from "next/server";
-import { getGroq, GROQ_MODEL_MAIN, isGroqConfigured } from "@/lib/groq";
-import { SYSTEM_PROMPT_WEEKLY_DIGEST } from "@/lib/prompts";
 import { UnauthorizedError, getUserOrThrow, enforceRateLimit } from "@/lib/auth";
-import { db } from "@/lib/db";
-import { fetchUserTrades } from "@/lib/trades/queries";
-import { digestRequestSchema, digestResponseSchema, type DigestResponse } from "@/lib/journal/schema";
-import { detectPatterns, buildDigestDataBlock } from "@/lib/journal/digest-patterns";
-import type { ChatCompletionMessageParam } from "groq-sdk/resources/chat/completions";
+import {
+  digestRequestSchema,
+  digestResponseSchema,
+} from "@/lib/journal/schema";
+import {
+  generateWeeklyDigest,
+  fetchLatestWeeklyDigest,
+} from "@/lib/journal/generate-digest";
 
 export const runtime = "nodejs";
-
-const MIN_TRADES_FOR_DIGEST = 3;
 
 export async function POST(req: Request) {
   try {
@@ -54,119 +57,66 @@ export async function POST(req: Request) {
       );
     }
 
-    // Fetch trades in the window, oldest first. user.id is needed later
-    // to persist the digest row; fetchUserTrades authenticates itself.
     const user = await getUserOrThrow();
-    const trades = await fetchUserTrades({
-      openedFrom: from,
-      openedTo: to,
-      orderBy: "openedAt",
-      order: "asc",
-      limit: 500,
-    });
-    const patterns = detectPatterns(trades);
-    const windowStart = from.toISOString();
-    const windowEnd = to.toISOString();
+    try {
+      const { response, usedFallback } = await generateWeeklyDigest(
+        user.id,
+        from,
+        to,
+      );
 
-    const hasEnough = trades.filter((t) => t.pnl != null).length >= MIN_TRADES_FOR_DIGEST;
-
-    // Build the AI message.
-    const dataBlock = buildDigestDataBlock(trades, patterns, windowStart, windowEnd);
-    const userMessage: ChatCompletionMessageParam = {
-      role: "user",
-      content: dataBlock,
-    };
-
-    let summary: string;
-    let insights: string[];
-    let question: string;
-    let analysisId: string | null = null;
-
-    if (isGroqConfigured()) {
-      try {
-        const groq = getGroq();
-        const completion = await groq.chat.completions.create({
-          model: GROQ_MODEL_MAIN,
-          messages: [
-            { role: "system", content: SYSTEM_PROMPT_WEEKLY_DIGEST },
-            userMessage,
-          ],
-          response_format: { type: "json_object" },
-          temperature: 0.4,
-          max_tokens: 800,
-        });
-        const raw = completion.choices[0]?.message?.content ?? "{}";
-        const parsed = JSON.parse(raw) as {
-          summary?: string;
-          insights?: unknown;
-          question?: string;
-        };
-        summary = typeof parsed.summary === "string" ? parsed.summary : "";
-        insights = Array.isArray(parsed.insights)
-          ? parsed.insights.filter((x): x is string => typeof x === "string").slice(0, 3)
-          : [];
-        question = typeof parsed.question === "string" ? parsed.question : "";
-      } catch (err) {
-        console.error("[/api/journal/digest] Groq error:", err);
+      // Validate our own response shape.
+      const safe = digestResponseSchema.safeParse(response);
+      if (!safe.success) {
+        console.error("[/api/journal/digest] response shape mismatch:", safe.error);
         return NextResponse.json(
-          { error: "AI service unavailable. Please try again." },
-          { status: 502, headers: rateHeaders },
+          { error: "Internal: response shape mismatch." },
+          { status: 500, headers: rateHeaders },
         );
       }
-    } else {
-      // No Groq - return the deterministic patterns with a stub.
-      summary = hasEnough
-        ? `${trades.filter((t) => t.pnl != null).length} trades in the window. See the detected patterns below.`
-        : "Not enough closed trades in this window for a meaningful digest.";
-      insights = [];
-      question = "What was your biggest recurring pattern this week?";
-    }
 
-    // Save to ai_analyses (best-effort).
-    const output = JSON.stringify({ summary, insights, question });
-    try {
-      const saved = await db.aiAnalysis.create({
-        data: {
-          userId: user.id,
-          type: "weekly_digest",
-          inputSummary: dataBlock.slice(0, 2000),
-          output,
-        },
-        select: { id: true },
+      return NextResponse.json(safe.data, {
+        headers: { ...rateHeaders, "X-Digest-Fallback": usedFallback ? "1" : "0" },
       });
-      analysisId = saved.id;
     } catch (err) {
-      console.warn("[/api/journal/digest] save failed:", err);
-    }
-
-    const response: DigestResponse = {
-      id: analysisId,
-      window_start: windowStart,
-      window_end: windowEnd,
-      analyzed_count: trades.length,
-      has_enough_data: hasEnough,
-      summary,
-      insights,
-      question,
-      patterns: patterns.map((p) => ({ key: p.key, statement: p.statement })),
-    };
-
-    // Validate our own response shape.
-    const safe = digestResponseSchema.safeParse(response);
-    if (!safe.success) {
-      console.error("[/api/journal/digest] response shape mismatch:", safe.error);
+      console.error("[/api/journal/digest] generation failed:", err);
       return NextResponse.json(
-        { error: "Internal: response shape mismatch." },
-        { status: 500, headers: rateHeaders },
+        { error: "AI service unavailable. Please try again." },
+        { status: 502, headers: rateHeaders },
       );
     }
-
-    return NextResponse.json(safe.data, { headers: rateHeaders });
   } catch (err) {
     if (err instanceof UnauthorizedError) {
       return NextResponse.json({ error: err.message }, { status: 401 });
     }
     console.error("[/api/journal/digest] unhandled:", err);
+    return NextResponse.json(
+      { error: "Internal server error." },
+      { status: 500 },
+    );
+  }
+}
+
+export async function GET(req: Request) {
+  try {
+    const user = await getUserOrThrow();
+    const rl = await enforceRateLimit(req, "read");
+    if (!rl.ok) return rl.response;
+
+    const digest = await fetchLatestWeeklyDigest(user.id);
+    if (!digest) return NextResponse.json({ digest: null }, { headers: rl.headers });
+
+    const safe = digestResponseSchema.safeParse(digest);
+    if (!safe.success) {
+      console.error("[/api/journal/digest GET] shape mismatch:", safe.error);
+      return NextResponse.json({ digest: null }, { headers: rl.headers });
+    }
+    return NextResponse.json({ digest: safe.data }, { headers: rl.headers });
+  } catch (err) {
+    if (err instanceof UnauthorizedError) {
+      return NextResponse.json({ error: err.message }, { status: 401 });
+    }
+    console.error("[/api/journal/digest GET] unhandled:", err);
     return NextResponse.json(
       { error: "Internal server error." },
       { status: 500 },

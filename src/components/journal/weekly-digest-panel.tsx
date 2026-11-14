@@ -7,8 +7,8 @@
  * includes the deterministic patterns (always shown) + the AI's
  * summary / insights / question (when Groq is configured).
  */
-import { useState } from "react";
-import { Sparkles, Loader2, AlertTriangle, Lightbulb, HelpCircle } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Sparkles, Loader2, AlertTriangle, Lightbulb, HelpCircle, CalendarClock } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -17,7 +17,32 @@ import type { DigestResponse } from "@/lib/journal/schema";
 export function WeeklyDigestPanel() {
   const [loading, setLoading] = useState(false);
   const [digest, setDigest] = useState<DigestResponse | null>(null);
+  /** True when the digest came from the scheduled sweep, not a click. */
+  const [scheduled, setScheduled] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Read-back: surface the latest SAVED digest on load. This is how
+  // scheduled reviews (run by /api/cron/weekly-review) reach you —
+  // they're generated while you're away and shown here automatically.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/journal/digest");
+        if (!res.ok) return;
+        const body = (await res.json()) as { digest: DigestResponse | null };
+        if (!cancelled && body.digest) {
+          setDigest(body.digest);
+          setScheduled(true);
+        }
+      } catch {
+        // Silent: the panel stays empty, the button still works.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const generate = async () => {
     setLoading(true);
@@ -34,6 +59,7 @@ export function WeeklyDigestPanel() {
       }
       const data: DigestResponse = await res.json();
       setDigest(data);
+      setScheduled(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to generate digest.");
     } finally {
@@ -74,6 +100,12 @@ export function WeeklyDigestPanel() {
         {digest && (
           <>
             <div className="flex flex-wrap gap-2 text-xs">
+              {scheduled && (
+                <Badge className="bg-primary/15 text-primary">
+                  <CalendarClock className="mr-1 h-3 w-3" />
+                  Scheduled review
+                </Badge>
+              )}
               <Badge variant="outline">
                 {new Date(digest.window_start).toLocaleDateString()} -{" "}
                 {new Date(digest.window_end).toLocaleDateString()}
@@ -134,7 +166,8 @@ export function WeeklyDigestPanel() {
 
         {!digest && !error && !loading && (
           <p className="py-4 text-center text-sm text-muted-foreground">
-            Click Generate to analyze your last 7 days.
+            No review yet. Click Generate, or wait for the scheduled weekly
+            review to appear here automatically.
           </p>
         )}
       </CardContent>

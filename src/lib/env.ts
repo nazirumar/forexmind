@@ -26,11 +26,11 @@ const envSchema = z.object({
   GROQ_MODEL_MAIN: z
     .string()
     .min(1)
-    .default("llama-3.3-70b-versatile"),
+    .default("openai/gpt-oss-120b"),
   GROQ_MODEL_FAST: z
     .string()
     .min(1)
-    .default("llama-3.1-8b-instant"),
+    .default("openai/gpt-oss-20b"),
 
   // ---- Market data providers (optional in dev, required in prod) ----
   TWELVE_DATA_API_KEY: z.string().optional(),

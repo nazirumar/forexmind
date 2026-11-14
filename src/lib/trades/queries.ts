@@ -373,6 +373,54 @@ export async function fetchUserTrades(opts: FetchTradesOpts = {}): Promise<Trade
   }
 }
 
+/**
+ * Fetch trades for an EXPLICIT userId (not the session).
+ *
+ * Server-side maintenance tasks only — the cron weekly-review loop
+ * needs trades for every user without an HTTP session in scope.
+ * Never call this from a user-facing route handler: pass
+ * `fetchUserTrades` (session-scoped) instead.
+ */
+export async function fetchTradesForUserId(
+  userId: string,
+  opts: FetchTradesOpts = {},
+): Promise<TradeRow[]> {
+  const {
+    limit = 200,
+    orderBy = "createdAt",
+    order = "desc",
+    openedFrom,
+    openedTo,
+    closedOnly = false,
+    nullsFirst = false,
+  } = opts;
+
+  const where: Record<string, unknown> = { userId };
+  const openedAt: Record<string, unknown> = {};
+  if (openedFrom) openedAt.gte = openedFrom;
+  if (openedTo) openedAt.lte = openedTo;
+  if (Object.keys(openedAt).length > 0) where.openedAt = openedAt;
+  if (closedOnly) where.closedAt = { not: null };
+
+  const orderByClause: Record<string, unknown> = {};
+  if (nullsFirst && orderBy === "closedAt") {
+    orderByClause[orderBy] = { sort: order, nulls: "first" };
+  } else {
+    orderByClause[orderBy] = order;
+  }
+
+  try {
+    const trades = await db.trade.findMany({
+      where,
+      orderBy: orderByClause,
+      take: limit,
+    });
+    return trades.map(toTradeRow);
+  } catch (err) {
+    throw new TradesError(500, `Failed to fetch trades: ${errMessage(err)}`);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Filter → Prisma where
 // ---------------------------------------------------------------------------
