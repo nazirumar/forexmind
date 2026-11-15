@@ -18,7 +18,7 @@
  * we use it instead of re-fetching, to keep the UI snappy.
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Plus, Pencil, Trash2, Loader2, AlertTriangle, BookOpen, RefreshCw, BarChart3, ListOrdered, Hash } from "lucide-react";
+import { Plus, Pencil, Trash2, Loader2, AlertTriangle, BookOpen, RefreshCw, BarChart3, ListOrdered, Hash, Target } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -66,6 +66,7 @@ import { AnalyticsPanel } from "@/components/journal/analytics-panel";
 import { JournalReviewPanel } from "@/components/journal/journal-review-panel";
 import { WeeklyDigestPanel } from "@/components/journal/weekly-digest-panel";
 import { ImportExportPanel } from "@/components/journal/import-export-panel";
+import { StrategiesModal } from "@/components/journal/strategies-modal";
 import {
   computeStats,
   formatMoney,
@@ -97,6 +98,7 @@ export function JournalClient() {
 
   const [filter, setFilter] = useState<TradeFilter>(EMPTY_FILTER);
   const [view, setView] = useState<"trades" | "analytics">("trades");
+  const [strategiesOpen, setStrategiesOpen] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<TradeRow | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -241,6 +243,15 @@ export function JournalClient() {
             <Button
               variant="outline"
               size="sm"
+              onClick={() => setStrategiesOpen(true)}
+              aria-label="Manage strategies"
+            >
+              <Target className="h-4 w-4" aria-hidden="true" />
+              <span className="hidden sm:inline ml-1">Strategies</span>
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
               onClick={load}
               disabled={!loaded}
               aria-label="Refresh trades"
@@ -254,6 +265,12 @@ export function JournalClient() {
             </Button>
           </div>
         }
+      />
+
+      <StrategiesModal
+        open={strategiesOpen}
+        onOpenChange={setStrategiesOpen}
+        onChanged={() => void load()}
       />
 
       {/* Auth-required banner (sandbox without Supabase configured). */}

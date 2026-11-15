@@ -34,6 +34,7 @@ model User {
   watchlist     Watchlist[]
   alerts        PriceAlert[]
   accounts      Account[]
+  strategies    Strategy[]
 }
 
 // ---------------------------------------------------------------------------
@@ -75,11 +76,41 @@ model Trade {
   user          User       @relation(fields: [userId], references: [id], onDelete: Cascade)
   account       Account?   @relation(fields: [accountId], references: [id], onDelete: SetNull)
   accountId     String?
+  strategyRef   Strategy?  @relation(fields: [strategyId], references: [id], onDelete: SetNull)
+  strategyId    String?
   linkedPlans   TradePlan[]
 
   @@index([userId, createdAt(sort: Desc)])
   @@index([userId, closedAt(sort: Desc)])
   @@index([accountId])
+  @@index([strategyId])
+}
+
+// ---------------------------------------------------------------------------
+// Strategy library (user-defined, related to trades)
+// ---------------------------------------------------------------------------
+
+/**
+ * A user-defined trading strategy ("London breakout", "News fade").
+ *
+ * Trades link to their strategy via Trade.strategyId (FK, SetNull on
+ * delete) AND keep the denormalized `strategy` text so analytics that
+ * read the text column keep working. Free-typed strategy names in the
+ * trade form are auto-promoted into library rows by the create path.
+ */
+model Strategy {
+  id          String   @id @default(uuid())
+  userId      String
+  name        String
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  trades      Trade[]
+
+  @@unique([userId, name])
+  @@index([userId, createdAt])
 }
 
 // ---------------------------------------------------------------------------

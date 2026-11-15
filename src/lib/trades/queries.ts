@@ -21,6 +21,7 @@ import type { Trade as PrismaTrade } from "@prisma/client";
 import { getUserOrThrow } from "@/lib/auth";
 import type { SessionUser } from "@/lib/auth";
 import { getSelectedAccountId, resolveTradeAccountId } from "@/lib/accounts/queries";
+import { resolveStrategyForText } from "@/lib/strategies/queries";
 import {
   computeStats,
   tradeRowSchema,
@@ -141,8 +142,9 @@ export async function createTrade(input: TradeCreate): Promise<TradeRow> {
   const { user } = await context();
   try {
     const accountId = await resolveTradeAccountId(user.id);
+    const strategyId = await resolveStrategyForText(user.id, input.strategy);
     const created = await db.trade.create({
-      data: { ...createInputToData(input, user.id), accountId },
+      data: { ...createInputToData(input, user.id), accountId, strategyId },
     });
     return toTradeRow(created);
   } catch (err) {
@@ -165,10 +167,16 @@ export async function bulkCreateTrades(inputs: TradeCreate[]): Promise<TradeRow[
   if (inputs.length === 0) return [];
   try {
     const accountId = await resolveTradeAccountId(user.id);
+    // One shared strategy resolution for the batch (all trades in an
+    // import usually share one strategy label; resolve the first
+    // non-empty).
+    const strategyText = inputs.find((i) => i.strategy?.trim())?.strategy ?? null;
+    const strategyId = await resolveStrategyForText(user.id, strategyText);
     const created = await db.trade.createManyAndReturn({
       data: inputs.map((input) => ({
         ...createInputToData(input, user.id),
         accountId,
+        strategyId,
       })),
     });
     return created.map(toTradeRow);
@@ -272,6 +280,13 @@ export async function updateTrade(id: string, input: TradeUpdate): Promise<Trade
   const data = updateInputToData(input);
   if (Object.keys(data).length === 0) {
     throw new TradesError(400, "No fields to update.");
+  }
+  // Keep the strategy relation in sync when the text changes: resolve
+  // the new name to a library row (auto-creating it), or clear the
+  // link when the text is removed.
+  if ("strategy" in data) {
+    const strategyId = await resolveStrategyForText(user.id, (data.strategy as string | null) ?? null);
+    data.strategyId = strategyId;
   }
   // Recompute r_multiple if pnl or risk_amount changed.
   if ("pnl" in data || "riskAmount" in data) {

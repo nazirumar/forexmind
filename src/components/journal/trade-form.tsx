@@ -230,13 +230,34 @@ export function TradeForm({ initial, onSaved, onCancel }: Props) {
     { time: string; title: string }[]
   >([]);
 
-  // Dynamic vocabulary: strategy / emotion suggestions come from the
-  // values THIS user has actually logged before (via /api/trades/meta).
-  // Nothing is hardcoded - the form learns the user's own terms.
-  const [historyMeta, setHistoryMeta] = useState<{
-    strategies: string[];
-    emotions: string[];
-  }>({ strategies: [], emotions: [] });
+  // Dynamic vocabulary: strategy suggestions come from the user's
+  // Strategy LIBRARY (GET /api/strategies) — a first-class entity that
+  // trades link to via FK. Free-typed names are auto-promoted into the
+  // library by the create path, so it stays in sync either way.
+  const [strategyNames, setStrategyNames] = useState<string[]>([]);
+
+  useEffect(() => {
+    let active = true;
+    fetch("/api/strategies")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((body) => {
+        if (!active || !body?.strategies) return;
+        setStrategyNames(
+          (body.strategies as { name: string }[]).map((s) => s.name),
+        );
+      })
+      .catch(() => {
+        // Fetch failed - the input just has no suggestions.
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  // Emotion suggestions come from the values the user has logged
+  // before (/api/trades/meta) — psychological states are personal
+  // vocabulary, not a fixed enum.
+  const [emotionNames, setEmotionNames] = useState<string[]>([]);
 
   useEffect(() => {
     let active = true;
@@ -244,13 +265,10 @@ export function TradeForm({ initial, onSaved, onCancel }: Props) {
       .then((r) => (r.ok ? r.json() : null))
       .then((meta) => {
         if (!active || !meta) return;
-        setHistoryMeta({
-          strategies: Array.isArray(meta.strategies) ? meta.strategies : [],
-          emotions: Array.isArray(meta.emotions) ? meta.emotions : [],
-        });
+        setEmotionNames(Array.isArray(meta.emotions) ? meta.emotions : []);
       })
       .catch(() => {
-        // Meta fetch failed - inputs just have no suggestions.
+        // Meta fetch failed - the input just has no suggestions.
       });
     return () => {
       active = false;
@@ -796,12 +814,12 @@ export function TradeForm({ initial, onSaved, onCancel }: Props) {
           <Input
             id="strategy"
             list="strategy-suggestions"
-            placeholder={historyMeta.strategies.length > 0 ? historyMeta.strategies.slice(0, 2).join(" / ") : "trend / breakout / fade"}
+            placeholder={strategyNames.length > 0 ? strategyNames.slice(0, 2).join(" / ") : "trend / breakout / fade"}
             value={form.strategy}
             onChange={(e) => set("strategy", e.target.value)}
           />
           <datalist id="strategy-suggestions">
-            {historyMeta.strategies.map((s) => (
+            {strategyNames.map((s) => (
               <option key={s} value={s} />
             ))}
           </datalist>
@@ -830,12 +848,12 @@ export function TradeForm({ initial, onSaved, onCancel }: Props) {
           <Input
             id="emotion"
             list="emotion-suggestions"
-            placeholder={historyMeta.emotions.length > 0 ? historyMeta.emotions.slice(0, 2).join(" / ") : "calm / FOMO / revenge"}
+            placeholder={emotionNames.length > 0 ? emotionNames.slice(0, 2).join(" / ") : "calm / FOMO / revenge"}
             value={form.emotion}
             onChange={(e) => set("emotion", e.target.value)}
           />
           <datalist id="emotion-suggestions">
-            {historyMeta.emotions.map((e) => (
+            {emotionNames.map((e) => (
               <option key={e} value={e} />
             ))}
           </datalist>
