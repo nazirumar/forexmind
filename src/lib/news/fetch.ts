@@ -21,13 +21,14 @@ import {
   preferredProvider,
 } from "@/lib/news/config";
 import { fetchFinnhubNews, NewsProviderError } from "@/lib/news/finnhub";
+import { scrapeNews, NewsScrapeError } from "@/lib/news/scraper";
 import { sampleNews } from "@/lib/news/fallback";
 
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
 type CacheEntry = {
   items: NewsItem[];
-  provider: "finnhub" | "twelvedata" | "sample";
+  provider: "finnhub" | "scraper" | "twelvedata" | "sample";
   fetchedAt: string;
   expiresAt: number;
   note?: string;
@@ -64,33 +65,73 @@ export async function fetchNews(
   // No provider configured -> sample, but still cache to avoid
   // recomputing the relative times on every request.
   if (!isNewsConfigured()) {
-    const items = sampleNews().slice(0, Math.max(1, Math.min(50, limit)));
-    _cache = {
-      items,
-      provider: "sample",
-      fetchedAt: new Date().toISOString(),
-      expiresAt: Date.now() + CACHE_TTL_MS,
-      note:
-        "Sample data - configure FINNHUB_API_KEY or TWELVE_DATA_API_KEY to fetch real headlines.",
-    };
-    return {
-      items,
-      provider: "sample",
-      fetched_at: _cache.fetchedAt,
-      cached: false,
-      note: _cache.note,
-    };
+    // No paid provider key - use the RSS scraper (keyless) before
+    // falling back to the sample dataset.
+    try {
+      const scraped = await scrapeNews();
+      const items = scraped.slice(0, Math.max(1, Math.min(50, limit)));
+      _cache = {
+        items,
+        provider: "scraper",
+        fetchedAt: new Date().toISOString(),
+        expiresAt: Date.now() + CACHE_TTL_MS,
+        note: "Live headlines scraped from public forex news feeds (no API key needed).",
+      };
+      return {
+        items,
+        provider: "scraper",
+        fetched_at: _cache.fetchedAt,
+        cached: false,
+        note: _cache.note,
+      };
+    } catch (err) {
+      const reason =
+        err instanceof NewsScrapeError ? err.message : "Unknown scraper error.";
+      const items = sampleNews().slice(0, Math.max(1, Math.min(50, limit)));
+      _cache = {
+        items,
+        provider: "sample",
+        fetchedAt: new Date().toISOString(),
+        expiresAt: Date.now() + CACHE_TTL_MS,
+        note: `RSS scrape failed (${reason}). Showing sample data instead.`,
+      };
+      return {
+        items,
+        provider: "sample",
+        fetched_at: _cache.fetchedAt,
+        cached: false,
+        note: _cache.note,
+      };
+    }
   }
 
   const provider = preferredProvider();
   let items: NewsItem[];
-  let usedProvider: "finnhub" | "twelvedata" | "sample" = "sample";
+  let usedProvider: "finnhub" | "scraper" | "twelvedata" | "sample" = "sample";
   let note: string | undefined;
 
   if (provider === "finnhub") {
     try {
       items = await fetchFinnhubNews(limit);
       usedProvider = "finnhub";
+      // Finnhub's forex feed can be very sparse (sometimes 1-2 items).
+      // Top it up with RSS-scraped headlines so the page never looks
+      // nearly empty while a key is configured.
+      if (items.length < 10) {
+        try {
+          const scraped = await scrapeNews();
+          const seen = new Set(items.map((i) => i.headline.toLowerCase().slice(0, 80)));
+          const topUp = scraped
+            .filter((i) => !seen.has(i.headline.toLowerCase().slice(0, 80)))
+            .slice(0, limit - items.length);
+          if (topUp.length > 0) {
+            items = [...items, ...topUp];
+            note = `Finnhub returned only ${items.length - topUp.length} item(s); topped up from public RSS feeds.`;
+          }
+        } catch {
+          // Scrape top-up is best-effort; keep the Finnhub result as-is.
+        }
+      }
     } catch (err) {
       // Fall back to sample data; surface the reason to the UI.
       const reason =

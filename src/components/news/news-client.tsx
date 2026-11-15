@@ -35,6 +35,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { MarketBrief } from "@/components/news/market-brief";
+import { AgentWire } from "@/components/news/agent-wire";
 import { PriceTicker } from "@/components/prices/price-ticker";
 import { EconomicCalendarPanel } from "@/components/calendar/economic-calendar-panel";
 import {
@@ -52,6 +53,7 @@ const WATCHLIST_CCYS = [
 
 const PROVIDER_LABEL: Record<NewsResponse["provider"], string> = {
   finnhub: "Finnhub",
+  scraper: "RSS scrape",
   twelvedata: "Twelve Data",
   sample: "Sample data",
 };
@@ -216,6 +218,11 @@ export function NewsClient() {
           Loading headlines...
         </div>
       )}
+
+      {/* AI Agent wire: scraped feeds + AI curation (signed-in only) */}
+      <div className="mt-6">
+        <AgentWire />
+      </div>
 
       {/* AI Brief */}
       {loaded && data && filtered.length > 0 && (

@@ -9,7 +9,7 @@ import { z } from "zod";
 
 export const newsItemSchema = z.object({
   id: z.string(),
-  /** Source / publisher: "Reuters", "Forexlive", "Finnhub" etc. */
+  /** Source / publisher: "Reuters", "FXStreet", "Finnhub" etc. */
   source: z.string().max(80),
   headline: z.string().min(1).max(280),
   /** Short summary or first paragraph, max 1000 chars. */
@@ -26,6 +26,32 @@ export const newsItemSchema = z.object({
 export type NewsItem = z.infer<typeof newsItemSchema>;
 
 /**
+ * AI enrichment added by the curator agent (GET /api/news/curated).
+ * Everything except `ai_summary` is optional so partial model output
+ * still validates.
+ */
+export const curatedNewsItemSchema = newsItemSchema.extend({
+  /** Neutral one-sentence factual summary written by the AI agent. */
+  ai_summary: z.string().min(1).max(400),
+  /** e.g. "monetary-policy" | "data" | "geopolitics" | "analysis" | "other". */
+  category: z.string().max(40).default("other"),
+  /** Agent-assigned forex relevance, 0-10 (UI sorts/orders by this). */
+  weight: z.number().int().min(0).max(10).default(5),
+});
+
+export type CuratedNewsItem = z.infer<typeof curatedNewsItemSchema>;
+
+export const curatedNewsResponseSchema = z.object({
+  items: z.array(curatedNewsItemSchema),
+  updated_at: z.string(),
+  cached: z.boolean(),
+  /** Optional reason when curation degraded (e.g. AI failed -> raw feed). */
+  note: z.string().optional(),
+});
+
+export type CuratedNewsResponse = z.infer<typeof curatedNewsResponseSchema>;
+
+/**
  * Response envelope returned by GET /api/news.
  * - `provider` tells the UI which source was actually used (so we can
  *   label "Sample data" vs "Finnhub" honestly).
@@ -34,7 +60,7 @@ export type NewsItem = z.infer<typeof newsItemSchema>;
  */
 export const newsResponseSchema = z.object({
   items: z.array(newsItemSchema),
-  provider: z.enum(["finnhub", "twelvedata", "sample"]),
+  provider: z.enum(["finnhub", "scraper", "twelvedata", "sample"]),
   fetched_at: z.string(),
   cached: z.boolean(),
   /** Optional reason when the provider returned no items. */
