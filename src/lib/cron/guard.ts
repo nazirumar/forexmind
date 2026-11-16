@@ -3,16 +3,22 @@
  *
  * Cron routes are cross-user maintenance tasks (they intentionally
  * bypass the per-user session boundary), so they authenticate with a
- * shared secret instead: the caller sends CRON_SECRET as the
- * `x-cron-secret` header or `?secret=` query param. When CRON_SECRET
- * is not configured the endpoint refuses to run (503) so an
- * unauthenticated sweep can't be triggered by randoms.
+ * shared secret instead. Accepted forms:
+ *  - `Authorization: Bearer <CRON_SECRET>` (what Vercel cron sends
+ *    when the CRON_SECRET env var is defined)
+ *  - `x-cron-secret: <CRON_SECRET>` header
+ *  - `?secret=<CRON_SECRET>` query param (external schedulers)
+ *
+ * When CRON_SECRET is not configured the endpoint refuses to run
+ * (503) so an unauthenticated sweep can't be triggered by randoms.
  */
 import { NextResponse } from "next/server";
 
 export function cronAuthorized(req: Request): boolean {
   const secret = process.env.CRON_SECRET;
   if (!secret) return false; // not configured -> refuse
+  const auth = req.headers.get("authorization");
+  if (auth === `Bearer ${secret}`) return true;
   const url = new URL(req.url);
   return (
     req.headers.get("x-cron-secret") === secret ||
