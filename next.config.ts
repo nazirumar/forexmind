@@ -24,8 +24,13 @@ import type { NextConfig } from "next";
  *      'unsafe-inline' for styles (Tailwind + shadcn/ui inject styles
  *        at runtime; CSP-friendly nonce-based style hashing is a larger
  *        refactor we defer to a future hardening pass)
- *      'unsafe-inline' for scripts ONLY in dev (Next.js HMR / React
- *        DevTools need it; prod restricts to 'self')
+ *      'unsafe-inline' for scripts in dev AND prod - Next.js App
+ *        Router inlines its RSC/hydration payload as <script> tags in
+ *        every page. Without 'unsafe-inline' the browser blocks them,
+ *        the app never hydrates, and every client-side feature
+ *        (auth forms, journal, watchlist...) silently dies while the
+ *        HTML still renders. A nonce-based CSP is the proper fix and
+ *        is deferred to a future hardening pass.
  *      connect-src 'self' https://*.supabase.co - for the browser
  *        Supabase client (auth + RLS)
  *      img-src 'self' data: - data: for inline SVG icons from lucide
@@ -43,11 +48,12 @@ import type { NextConfig } from "next";
  *  - The Groq API key never reaches the browser, so no connect-src
  *    entry for api.groq.com is needed
  */
-const isDev = process.env.NODE_ENV === "development";
-
 const csp = [
   `default-src 'self'`,
-  `script-src 'self'${isDev ? " 'unsafe-inline'" : ""}`,
+  // 'unsafe-inline' is REQUIRED in prod too: Next.js App Router ships
+  // its RSC hydration payload as inline <script> tags. Restricting to
+  // 'self' blocks hydration -> the whole UI is non-interactive.
+  `script-src 'self' 'unsafe-inline'`,
   `style-src 'self' 'unsafe-inline' https://fonts.googleapis.com`,
   `font-src 'self' https://fonts.gstatic.com data:`,
   `img-src 'self' data: blob:`,
